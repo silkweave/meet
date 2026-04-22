@@ -4,9 +4,7 @@ import pkg from './package.json' with { type: "json" }
 const shared: UserConfig = {
   outDir: 'build',
   sourcemap: true,
-  dts: {
-    resolver: 'tsc'
-  },
+  dts: true,
   deps: { neverBundle: ['zod', 'googleapis', 'google-auth-library'] },
   format: ['esm'],
   define: { __VERSION__: JSON.stringify(pkg.version) },

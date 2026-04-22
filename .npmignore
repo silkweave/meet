@@ -6,4 +6,5 @@ CLAUDE.md
 eslint.config.mjs
 tsconfig.json
 tsdown.config.ts
+tsconfig.tsbuildinfo
 .silkweave-meet.json
