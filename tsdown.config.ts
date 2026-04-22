@@ -20,4 +20,5 @@ export default defineConfig([{
 }, {
   ...shared,
   entry: ['src/mcp.ts'],
+  banner: { js: '#!/usr/bin/env node' }
 }])
