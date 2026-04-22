@@ -1,0 +1,10 @@
+{
+  "version": "0.2.0",
+  "configurations": [{
+    "name": "mcp",
+    "type": "node",
+    "request": "launch",
+    "program": "${workspaceFolder}/node_modules/@modelcontextprotocol/inspector/cli/build/cli.js",
+    "args": ["--config", ".mcp.json"]
+  }]
+}

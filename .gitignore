@@ -1,0 +1,7 @@
+node_modules/
+build/
+.DS_Store
+.npmrc
+.silkweave-meet.json
+output.md
+tsconfig.tsbuildinfo

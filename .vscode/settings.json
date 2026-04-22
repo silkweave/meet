@@ -1,0 +1,31 @@
+{
+  "[jsonc]": {
+    "editor.formatOnSave": false
+  },
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit",
+    "source.organizeImports": "explicit"
+  },
+  "editor.formatOnSave": true,
+  "editor.rulers": [80],
+  "editor.tabCompletion": "on",
+  "editor.tabSize": 2,
+  "editor.trimAutoWhitespace": true,
+  "eslint.nodePath": "./node_modules",
+  "eslint.run": "onType",
+  "files.exclude": {
+    "**/.DS_Store": true,
+    "**/.git": true,
+    "**/node_modules": true,
+    "**/tsconfig.tsbuildinfo": false,
+    "**/build": true
+  },
+  "files.insertFinalNewline": true,
+  "files.trimTrailingWhitespace": true,
+  "js/ts.preferences.quoteStyle": "single",
+  "json.format.enable": false,
+  "js/ts.format.insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces": true,
+  "js/ts.format.semicolons": "remove",
+  "js/ts.updateImportsOnFileMove.enabled": "never",
+  "js/ts.tsdk.path": "node_modules/typescript/lib"
+}

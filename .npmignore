@@ -1,0 +1,9 @@
+.vscode/
+src/
+.mcp.json
+CLAUDE.md
+.claude/settings.local.json
+eslint.config.mjs
+tsconfig.json
+tsdown.config.ts
+.silkweave-meet.json

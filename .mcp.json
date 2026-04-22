@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "meet": {
+      "command": "pnpm",
+      "args": ["tsx", "src/mcp.ts"]
+    }
+  }
+}
