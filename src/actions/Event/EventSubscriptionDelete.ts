@@ -5,17 +5,16 @@ import { MeetClient } from '../../classes/MeetClient.js'
 
 export const EventSubscriptionDelete = createAction({
   name: 'eventSubscriptionDelete',
-  description: 'Delete a Google Workspace Events subscription.',
+  description: 'Delete a Google Workspace Events subscription. Impersonates `userEmail` (must be the subscription owner) via DWD.',
   args: ['name'],
   input: z.object({
-    userId: z.string().optional().default('default'),
+    userEmail: z.string().describe('Workspace user email (subscription owner) to impersonate via DWD'),
     name: z.string().describe('Subscription resource name `subscriptions/{id}`'),
     allowMissing: z.boolean().optional().default(true)
   }),
-  run: async ({ userId, name, allowMissing }) => {
-    const client = new MeetClient(userId)
+  run: async ({ userEmail, name, allowMissing }) => {
     const resourceName = name.startsWith('subscriptions/') ? name : `subscriptions/${name}`
-    return client.withAuth(async (auth) => {
+    return MeetClient.withAuth(userEmail, async (auth) => {
       const { data } = await google.workspaceevents({ version: 'v1', auth }).subscriptions.delete({ name: resourceName, allowMissing })
       return data
     })

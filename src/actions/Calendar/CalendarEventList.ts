@@ -5,9 +5,9 @@ import { MeetClient } from '../../classes/MeetClient.js'
 
 export const CalendarEventList = createAction({
   name: 'calendarEventList',
-  description: 'List Google Calendar events (upcoming or past) on the primary calendar, optionally filtered to those with a Google Meet link. Use this to find meeting IDs before fetching conference records.',
+  description: 'List Google Calendar events (upcoming or past) on the primary calendar, optionally filtered to those with a Google Meet link. Use this to find meeting IDs before fetching conference records. Impersonates `userEmail` via DWD.',
   input: z.object({
-    userId: z.string().optional().default('default'),
+    userEmail: z.string().describe('Workspace user email to impersonate via DWD'),
     timeMin: z.string().optional().describe('RFC3339 lower bound on event start (defaults to now)'),
     timeMax: z.string().optional().describe('RFC3339 upper bound on event start'),
     q: z.string().optional().describe('Free-text search across event summary/description/attendees'),
@@ -15,9 +15,8 @@ export const CalendarEventList = createAction({
     pageToken: z.string().optional(),
     onlyWithMeet: z.boolean().optional().default(true).describe('Only return events that have a Google Meet conference attached')
   }),
-  run: async ({ userId, timeMin, timeMax, q, maxResults, pageToken, onlyWithMeet }) => {
-    const client = new MeetClient(userId)
-    return client.withAuth(async (auth) => {
+  run: async ({ userEmail, timeMin, timeMax, q, maxResults, pageToken, onlyWithMeet }) => {
+    return MeetClient.withAuth(userEmail, async (auth) => {
       const { data } = await google.calendar({ version: 'v3', auth }).events.list({
         calendarId: 'primary',
         timeMin: timeMin ?? new Date().toISOString(),

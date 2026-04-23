@@ -2,23 +2,49 @@
 
 Google Meet API client exposed as both an **MCP server** and a **CLI**. Built with [silkweave](https://www.npmjs.com/package/silkweave).
 
+Authentication is **exclusively** through a Google Workspace service account with domain-wide delegation (DWD). There is no OAuth flow, no per-user token registry, no interactive login. One service-account JSON on disk and a list of Workspace user emails in a config file is the entire setup.
+
 ## Features
 
 - List upcoming meetings from Google Calendar and past Google Meet conference records
-- Retrieve conference details, participants, recordings, and transcripts
+- Retrieve conference details, participants, recordings, and transcripts (impersonating any Workspace user via DWD)
 - Render transcripts as clean Markdown (consecutive utterances per speaker merged)
-- Three ways to consume new-transcript notifications:
-  - `eventPullTranscripts` — MCP-native polling with a persisted cursor (idempotent)
-  - Workspace Events subscriptions (`eventSubscription*`) — space-level or user-level → your Pub/Sub topic
-  - Built-in background watcher (`transcriptWatch*`) — consumes Pub/Sub, writes Markdown files, runs a per-save shell command
+- Two ways to consume new-transcript notifications:
+  - `eventPullTranscripts` — on-demand polling with a persisted cursor (idempotent)
+  - Built-in background watcher (`transcriptWatch*`) — streams from Pub/Sub and writes Markdown files, with optional per-save shell command
 
 ## Quick Start
 
-### 1. Add the MCP Server
+### 1. Provision a service account with DWD
 
-No installation required -- `npx` downloads and runs the package automatically.
+In [Google Cloud Console](https://console.cloud.google.com/):
 
-**Claude Code** -- add to `.mcp.json` in your project root:
+1. Create or pick a project.
+2. Enable the **Google Calendar API**, **Google Meet API**, **Google Workspace Events API**, and **Cloud Pub/Sub API**.
+3. Create a service account; download its JSON key.
+
+In your [Google Workspace Admin Console](https://admin.google.com/):
+
+4. *Security → Access and data control → API controls → Domain-wide delegation → Add new*.
+5. Paste the service account's **Client ID** (the numeric one in the JSON key, field `client_id`).
+6. Grant these OAuth scopes:
+   - `https://www.googleapis.com/auth/userinfo.email`
+   - `https://www.googleapis.com/auth/calendar`
+   - `https://www.googleapis.com/auth/drive.readonly`
+   - `https://www.googleapis.com/auth/meetings.space.readonly`
+   - `https://www.googleapis.com/auth/meetings.space.created`
+
+### 2. Install the key locally
+
+```sh
+mkdir -p ~/.silkweave-meet
+cp /path/to/sa-key.json ~/.silkweave-meet/service-account.json
+chmod 600 ~/.silkweave-meet/service-account.json
+```
+
+That's all the auth configuration. No env vars, no OAuth flow.
+
+### 3. Register the MCP server (optional, for Claude Code)
 
 ```json
 {
@@ -31,178 +57,140 @@ No installation required -- `npx` downloads and runs the package automatically.
 }
 ```
 
-**Other MCP clients** -- use the command `npx -y -p @silkweave/meet meet-mcp` with stdio transport.
-
 The package ships two bins: `meet-mcp` (stdio MCP server) and `meet-cli` (same action set as direct commands).
 
-### 2. Create Google OAuth2 Credentials
+### 4. Try a call
 
-In [Google Cloud Console](https://console.cloud.google.com/):
-
-1. Create or pick a project.
-2. Enable these APIs:
-   - **Google Calendar API**
-   - **Google Meet API**
-   - **Google Workspace Events API** (only required if you plan to use `eventSubscription*`)
-3. OAuth consent screen → add your email as a test user (while the app is in testing).
-4. Credentials → *Create Credentials* → *OAuth client ID* → **Web application**.
-5. Add `http://localhost:3000/callback` (or whatever `redirectUri` you'll pass) as an authorized redirect URI.
-6. Download the Client ID and Client Secret.
-
-### 3. Authenticate
-
-Run the CLI (or call the MCP tool `googleAuthorize`):
-
-```bash
-npx -p @silkweave/meet meet-cli googleAuthorize --clientId=<id> --clientSecret=<secret>
+```sh
+npx -p @silkweave/meet meet-cli calendar-event-list --user-email=you@your-workspace.com
 ```
 
-Open the returned `authorizeUrl`, grant consent, and copy the `code` query parameter from the redirect. Then:
+## Configuration file
 
-```bash
-npx -p @silkweave/meet meet-cli googleGetToken <code>
-npx -p @silkweave/meet meet-cli googleGetUser
+Everything non-secret lives in `~/.silkweave-meet/config.json`:
+
+```json
+{
+  "users": ["alice@company.com", "bob@company.com"],
+  "watcher": {
+    "pubsubSubscriptions": ["projects/my-project/subscriptions/meet-transcripts-sub"],
+    "transcriptDir": "/Users/alice/meet-transcripts",
+    "onTranscriptCommand": "osascript -e 'display notification ...'",
+    "autoStart": true
+  },
+  "cursors": {
+    "alice@company.com": "2026-04-22T14:30:00Z"
+  }
+}
 ```
 
-Tokens are persisted to `~/.silkweave-meet.json`. Refresh is automatic; re-authenticate only if the refresh token is revoked.
-
-## Required Scopes
-
-Listed in `src/lib/scopes.ts`:
-
-| Scope | Purpose |
-| --- | --- |
-| `openid` | Identity primitives |
-| `userinfo.email`, `userinfo.profile` | `googleGetUser` identity |
-| `calendar.events.readonly` | List upcoming meetings (`calendarEvent*`) |
-| `meetings.space.readonly` | Read conference records, participants, transcripts; also authorises Meet subscriptions via Workspace Events API |
-| `meetings.space.created` | Read transcripts/recordings for private spaces the user created; also required for space-level Workspace Events subscriptions |
-| `pubsub` | Pull events from Pub/Sub for the background transcript watcher (`transcriptWatch*`) |
-
-## Usage
-
-### As a Library
-
-```bash
-pnpm add @silkweave/meet
-```
-
-```typescript
-import { MeetClient } from '@silkweave/meet'
-import { google } from 'googleapis'
-
-const client = new MeetClient('default')
-const conferences = await client.withAuth(async (auth) => {
-  const { data } = await google.meet({ version: 'v2', auth }).conferenceRecords.list()
-  return data.conferenceRecords ?? []
-})
-```
-
-### As a CLI
-
-```bash
-npx -p @silkweave/meet meet-cli <actionName> [flags]
-```
+- `users` — Workspace user emails the tool is allowed to impersonate. Populated by `setupSubscribeAll --users=a,b,c` or edited manually.
+- `watcher` — persisted watcher config, written by `transcriptWatchStart`.
+- `cursors` — per-user polling cursors for `eventPullTranscripts`.
 
 ## Tools Reference
 
-### Auth — `Google*`
+Every action that reads Google data takes a required `userEmail` — the Workspace user the service account impersonates for that call. Permissions match exactly what that user can see.
+
+The **MCP surface is intentionally small**: only `meetTranscriptList`, `meetTranscriptGet`, and `mcpStatus` are exposed over MCP. All other tools listed below are **CLI-only** (via `meet-cli`). This keeps MCP focused on consuming already-existing transcripts; subscription management, the background watcher, and multi-user setup all live in the CLI.
+
+### Upcoming meetings — `Calendar*` (CLI-only)
 
 | Tool | Purpose |
 | --- | --- |
-| `googleAuthorize` | Persist app credentials; return the consent URL for a given `userId`. |
-| `googleGetToken` | Exchange an authorization `code` for access/refresh tokens and persist them. |
-| `googleGetUser` | Return the authenticated user's identity (email, name, picture). |
-
-### Upcoming meetings — `Calendar*`
-
-| Tool | Purpose |
-| --- | --- |
-| `calendarEventList` | List Calendar events (optionally filtered to Meet-enabled ones). |
+| `calendarEventList` | List Calendar events on the user's primary calendar (optionally filtered to Meet-enabled ones). |
 | `calendarEventGet` | Get one event with Meet join info. |
 
 ### Past meetings & transcripts — `Meet*`
 
+`meetTranscriptList` and `meetTranscriptGet` are available on **both MCP and CLI**. The rest are CLI-only.
+
+| Tool | Surface | Purpose |
+| --- | --- | --- |
+| `meetTranscriptList` | MCP + CLI | List transcripts for a conference. |
+| `meetTranscriptGet` | MCP + CLI | Fetch a full transcript; returns Markdown by default, `format=json` for raw entries. |
+| `meetConferenceList` | CLI | List past `conferenceRecords` the user participated in (optional EBNF filter). |
+| `meetConferenceGet` | CLI | Fetch a single conference record. |
+| `meetParticipantList` | CLI | List participants of a conference. |
+| `meetRecordingList` | CLI | List recording artifacts (Drive links). |
+| `meetSpaceGet` | CLI | Resolve a space by `spaces/{id}` or meeting code. |
+
+### Notifications — `Event*` (CLI-only)
+
 | Tool | Purpose |
 | --- | --- |
-| `meetConferenceList` | List past `conferenceRecords` with optional EBNF filter. |
-| `meetConferenceGet` | Fetch a single conference record. |
-| `meetParticipantList` | List participants of a conference. |
-| `meetRecordingList` | List recording artifacts (Drive links). |
-| `meetTranscriptList` | List transcripts for a conference. |
-| `meetTranscriptGet` | Fetch a full transcript; returns Markdown by default, `format=json` for raw entries. |
-| `meetSpaceGet` | Resolve a space by `spaces/{id}` or meeting code. |
-
-### Notifications — `Event*`
-
-| Tool | Purpose |
-| --- | --- |
-| `eventPullTranscripts` | **Polling, MCP-native.** Returns transcripts generated since the stored cursor, then advances the cursor. Call on a schedule (e.g. Claude Code `/loop`). No Pub/Sub needed. |
-| `eventSubscriptionCreate` | Create a Workspace Events subscription for a specific Meet space, publishing events to a user-owned Pub/Sub topic. Requires `meet-api-event-push@system.gserviceaccount.com` to have Pub/Sub Publisher on the topic. |
-| `eventSubscriptionCreateForUser` | Create a Workspace Events subscription for all Meet events from a user (organizer or attendee), publishing to a Pub/Sub topic. Covers all meetings, not just a specific space. |
-| `eventSubscriptionList` | List existing subscriptions. |
+| `eventPullTranscripts` | Polling. Returns transcripts generated since the user's stored cursor, advances it. No Pub/Sub needed. |
+| `eventSubscriptionCreate` | Create a Workspace Events subscription for a specific Meet space (requires `meet-api-event-push@system.gserviceaccount.com` to have Pub/Sub Publisher on the topic). |
+| `eventSubscriptionCreateForUser` | Create a user-level Workspace Events subscription for the impersonated user. Covers meetings they own *or* attend. |
+| `eventSubscriptionList` | List existing subscriptions owned by the impersonated user. |
 | `eventSubscriptionDelete` | Delete a subscription. |
 
-### Background watcher — `TranscriptWatch*`
+### Background watcher — `TranscriptWatch*` (CLI-only)
 
-Long-running consumer that pulls events from one or more Pub/Sub subscriptions, saves each transcript as a Markdown file under a configurable directory, and optionally runs a shell command after each save.
+Singleton consumer that streams events from a Pub/Sub subscription (Pub/Sub auth from the same service-account key), and for each message impersonates (via DWD) the user whose Workspace Events subscription produced it — identified by the message's `ce-source` attribute — to fetch the transcript via the Meet API. One watcher covers every user listed in the config.
 
 | Tool | Purpose |
 | --- | --- |
 | `transcriptWatchStart` | Start the watcher (and persist config). Pass `pubsubSubscriptions`, `transcriptDir`, `onTranscriptCommand`, `autoStart`. |
 | `transcriptWatchStop` | Stop the watcher. Pass `disableAutoStart=true` to also disable boot-time auto-start. |
-| `transcriptWatchStatus` | Current status: running flag, per-subscription counters, last error, recent saved files. |
+| `transcriptWatchStatus` | Current status: running flag, per-subscription counters, known subscription owners, recent saved files. |
 
-When `autoStart: true` is persisted, the MCP server resumes the watcher on every boot.
+When `autoStart: true` is persisted, the MCP server resumes the watcher on every boot. Each saved file is named `YYYY-MM-DD_{meetCodeOrConferenceId}_{transcriptId}.md` so files sort chronologically.
 
-Each saved file is named `YYYY-MM-DD_{meetCodeOrConferenceId}_{transcriptId}.md` so files sort chronologically in the directory.
-
-### Operational — `Mcp*`
+### Multi-user setup — `Setup*` (CLI-only)
 
 | Tool | Purpose |
 | --- | --- |
-| `mcpHealth` | Report uptime/pid. |
-| `mcpRestart` | Exit the process so the host auto-restarts it and picks up code changes. |
+| `setupStatus` | Report, for each user in the config, whether DWD impersonation succeeds and which Workspace Events subscriptions they own. With `--pubsub-topic`, flag which users are subscribed to it. |
+| `setupSubscribeAll` | Create a user-level subscription for every user in the config. Optional `--users=a,b,c` also appends those emails to the config. Idempotent — re-running skips users already subscribed. |
 
-## Notifications for new transcripts
+These are registered only in `src/cli.ts` (not the MCP action list), because they orchestrate the whole config rather than a single user.
 
-Three complementary paths:
+### Operational — `Mcp*`
 
-1. **`eventPullTranscripts`** — on-demand polling. The MCP stdio process cannot receive HTTP webhooks, so polling-with-a-cursor is the right primitive for ad-hoc queries. Idempotent: repeat calls return no duplicates.
-2. **`transcriptWatch*` (built-in watcher)** — recommended for always-on setups. Create a Workspace Events subscription that publishes to a Pub/Sub topic (see below), create a Pub/Sub subscription on that topic, then call `transcriptWatchStart` with the subscription name. The watcher pulls messages continuously while the MCP server is running, saves Markdown to your configured directory, and can trigger a shell command per save.
-3. **`eventSubscriptionCreate` / `eventSubscriptionCreateForUser` → your own consumer** — when you want events consumed by an external system instead of the MCP watcher, create the Workspace Events subscription and consume from Pub/Sub yourself.
+| Tool | Surface | Purpose |
+| --- | --- | --- |
+| `mcpStatus` | MCP + CLI | Lightweight status: version/uptime/pid, service-account key presence, watcher running state, configured users with per-user subscription coverage, and the 10 most recent saved transcripts. |
 
-### End-to-end setup for the built-in watcher
+## Multi-user setup walkthrough
 
 ```sh
-# 1. Authorise (make sure pubsub scope is granted by re-running if upgrading).
-npx -p @silkweave/meet meet-cli googleAuthorize --clientId=... --clientSecret=...
-npx -p @silkweave/meet meet-cli googleGetToken <code>
-
-# 2. Create a Pub/Sub topic in your GCP project and grant Meet permission to publish.
+# 1. Create the shared Pub/Sub topic and let Meet publish to it.
 gcloud pubsub topics create meet-transcripts
 gcloud pubsub topics add-iam-policy-binding meet-transcripts \
   --member=serviceAccount:meet-api-event-push@system.gserviceaccount.com \
   --role=roles/pubsub.publisher
 
-# 3. Create a Workspace Events subscription -- user-level captures all meetings.
-npx -p @silkweave/meet meet-cli eventSubscriptionCreateForUser \
-  --userEmail=you@example.com \
-  --pubsubTopic=projects/<project>/topics/meet-transcripts
+# 2. Register the users and create one user-level subscription per person
+#    (idempotent). The --users flag appends to ~/.silkweave-meet/config.json.
+npx -p @silkweave/meet meet-cli setup-subscribe-all \
+  --pubsub-topic=projects/<project>/topics/meet-transcripts \
+  --users=alice@company.com,bob@company.com,carol@company.com,dave@company.com
 
-# 4. Create a Pub/Sub subscription to consume from (pull).
-gcloud pubsub subscriptions create meet-transcripts-sub \
-  --topic=meet-transcripts
+# 3. Confirm every user is subscribed.
+npx -p @silkweave/meet meet-cli setup-status \
+  --pubsub-topic=projects/<project>/topics/meet-transcripts
 
-# 5. Start the watcher.
-npx -p @silkweave/meet meet-cli transcriptWatchStart \
-  --pubsubSubscriptions=projects/<project>/subscriptions/meet-transcripts-sub \
-  --transcriptDir=~/meet-transcripts \
-  --onTranscriptCommand='osascript -e "display notification \"$MEET_CODE\" with title \"New transcript\""' \
-  --autoStart=true
+# 4. Create the pull subscription the watcher will stream from, and grant the
+#    service account Subscriber on it.
+gcloud pubsub subscriptions create meet-transcripts-sub --topic=meet-transcripts
+SA_EMAIL=$(jq -r .client_email ~/.silkweave-meet/service-account.json)
+gcloud pubsub subscriptions add-iam-policy-binding meet-transcripts-sub \
+  --member="serviceAccount:${SA_EMAIL}" --role=roles/pubsub.subscriber
+
+# 5. Start the watcher. Routes each incoming event to the right user's
+#    impersonation context based on the message's ce-source.
+npx -p @silkweave/meet meet-cli transcript-watch-start \
+  --pubsub-subscriptions=projects/<project>/subscriptions/meet-transcripts-sub \
+  --transcript-dir=~/meet-transcripts \
+  --auto-start=true
 ```
 
-### Shell command env vars
+User-level subscriptions expire (Google's max TTL applies). Re-run `setup-subscribe-all` on a schedule (cron / launchd) to refresh any that have expired; existing valid ones are skipped.
+
+User-level subscriptions capture `transcript.v2.fileGenerated` events for meetings the user **owns *or* is merely invited to** — that is the only non-owner event the Workspace Events API delivers, and it's exactly the one we want. Expect duplicates when multiple team members are in the same meeting; the watcher dedupes by `transcriptId` in memory per run.
+
+## Shell command env vars
 
 The `onTranscriptCommand` runs via `spawn(..., { shell: true })` with these environment variables exposed:
 
@@ -217,7 +205,25 @@ The `onTranscriptCommand` runs via `spawn(..., { shell: true })` with these envi
 | `$ENTRY_COUNT` | Number of transcript entries |
 | `$DATE` | `YYYY-MM-DD` prefix used in the filename |
 
-For very long transcripts, prefer reading from `$TRANSCRIPT_PATH` -- environment size is bounded (~256KB on macOS).
+For very long transcripts, prefer reading from `$TRANSCRIPT_PATH` — environment size is bounded (~256KB on macOS).
+
+## Library usage
+
+```bash
+pnpm add @silkweave/meet
+```
+
+```ts
+import { MeetClient } from '@silkweave/meet'
+import { google } from 'googleapis'
+
+const conferences = await MeetClient.withAuth('alice@company.com', async (auth) => {
+  const { data } = await google.meet({ version: 'v2', auth }).conferenceRecords.list()
+  return data.conferenceRecords ?? []
+})
+```
+
+`MeetClient.withAuth` creates a DWD-impersonating JWT for that user using the key at `~/.silkweave-meet/service-account.json`.
 
 ## Development
 
@@ -231,7 +237,7 @@ pnpm typecheck          # tsc --noEmit
 pnpm clean              # rm -rf build/
 ```
 
-When iterating through the MCP in Claude Code, call `mcp__meet__mcpRestart` after code changes to reload. Newly added tools require a full MCP reconnect (Claude Code caches the tool list at connection time).
+When iterating through the MCP in Claude Code, the server is a child process — after code changes, restart the MCP connection (or kill the process) so changes are picked up. Claude Code caches the tool list at connection time, so any change to the MCP action set also requires a full reconnect.
 
 ## License
 

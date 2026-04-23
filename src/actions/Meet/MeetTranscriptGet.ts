@@ -6,19 +6,18 @@ import { Participant, renderTranscriptMarkdown } from '../../lib/transcripts.js'
 
 export const MeetTranscriptGet = createAction({
   name: 'meetTranscriptGet',
-  description: 'Retrieve a full Google Meet transcript (all entries aggregated) rendered as Markdown or JSON. Defaults to the first transcript of the conference if no transcriptId is given.',
+  description: 'Retrieve a full Google Meet transcript (all entries aggregated) rendered as Markdown or JSON. Defaults to the first transcript of the conference if no transcriptId is given. Impersonates `userEmail` via DWD.',
   args: ['conferenceRecordId'],
   input: z.object({
-    userId: z.string().optional().default('default'),
+    userEmail: z.string().describe('Workspace user email to impersonate via DWD'),
     conferenceRecordId: z.string(),
     transcriptId: z.string().optional().describe('Bare transcript ID or full `conferenceRecords/{c}/transcripts/{t}` name. Defaults to the first available.'),
     format: z.enum(['markdown', 'json']).optional().default('markdown')
   }),
-  run: async ({ userId, conferenceRecordId, transcriptId, format }) => {
-    const client = new MeetClient(userId)
+  run: async ({ userEmail, conferenceRecordId, transcriptId, format }) => {
     const parent = conferenceRecordId.startsWith('conferenceRecords/') ? conferenceRecordId : `conferenceRecords/${conferenceRecordId}`
 
-    return client.withAuth(async (auth) => {
+    return MeetClient.withAuth(userEmail, async (auth) => {
       const meet = google.meet({ version: 'v2', auth })
 
       let transcriptName: string

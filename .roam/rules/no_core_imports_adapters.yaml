@@ -1,0 +1,15 @@
+# Rule: Core must not import from adapter packages
+# @silkweave/core is the foundation — it must not depend on any adapter.
+# Dependency direction: adapters → core, never core → adapters.
+name: "Core must not import adapters"
+description: "Core package must not import from adapter packages (mcp, cli, fastify, vercel, auth)"
+severity: error
+
+match:
+  from:
+    file_glob: "**/packages/core/src/**"
+    kind: [function, class, interface, variable]
+  to:
+    file_glob: "**/packages/{mcp,cli,fastify,vercel,auth}/src/**"
+    kind: [function, class, interface, variable]
+  max_distance: 1

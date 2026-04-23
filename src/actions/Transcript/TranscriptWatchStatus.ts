@@ -5,15 +5,12 @@ import { transcriptWatcher } from '../../lib/transcriptWatcher.js'
 
 export const TranscriptWatchStatus = createAction({
   name: 'transcriptWatchStatus',
-  description: 'Return the current transcript watcher status: whether it is running, per-subscription counters, recent saved transcripts, and the persisted configuration.',
-  input: z.object({
-    userId: z.string().optional().default('default')
-  }),
-  run: async ({ userId }) => {
-    const client = new MeetClient(userId)
+  description: 'Return the current transcript watcher status: running state, per-subscription counters, recent saved transcripts, number of known subscription owners, and the persisted configuration.',
+  input: z.object({}),
+  run: async () => {
     return {
       status: transcriptWatcher.getStatus(),
-      persistedConfig: client.getWatcherConfig() ?? null
+      persistedConfig: MeetClient.getWatcherConfig() ?? null
     }
   }
 })

@@ -5,11 +5,7 @@ import { EventSubscriptionCreate } from './Event/EventSubscriptionCreate.js'
 import { EventSubscriptionCreateForUser } from './Event/EventSubscriptionCreateForUser.js'
 import { EventSubscriptionDelete } from './Event/EventSubscriptionDelete.js'
 import { EventSubscriptionList } from './Event/EventSubscriptionList.js'
-import { GoogleAuthorize } from './Google/GoogleAuthorize.js'
-import { GoogleGetToken } from './Google/GoogleGetToken.js'
-import { GoogleGetUser } from './Google/GoogleGetUser.js'
-import { McpHealth } from './Mcp/McpHealth.js'
-import { McpRestart } from './Mcp/McpRestart.js'
+import { McpStatus } from './Mcp/McpStatus.js'
 import { MeetConferenceGet } from './Meet/MeetConferenceGet.js'
 import { MeetConferenceList } from './Meet/MeetConferenceList.js'
 import { MeetParticipantList } from './Meet/MeetParticipantList.js'
@@ -29,11 +25,7 @@ export const actions = [
   EventSubscriptionCreateForUser,
   EventSubscriptionDelete,
   EventSubscriptionList,
-  GoogleAuthorize,
-  GoogleGetToken,
-  GoogleGetUser,
-  McpHealth,
-  McpRestart,
+  McpStatus,
   MeetConferenceGet,
   MeetConferenceList,
   MeetParticipantList,
@@ -44,4 +36,10 @@ export const actions = [
   TranscriptWatchStart,
   TranscriptWatchStatus,
   TranscriptWatchStop
+]
+
+export const mcpActions = [
+  McpStatus,
+  MeetTranscriptGet,
+  MeetTranscriptList
 ]

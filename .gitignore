@@ -2,6 +2,7 @@ node_modules/
 build/
 .DS_Store
 .npmrc
+.roam/index.*
 .silkweave-meet.json
 output.md
 tsconfig.tsbuildinfo

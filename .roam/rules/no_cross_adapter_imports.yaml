@@ -1,0 +1,19 @@
+# Rule: Adapters must not import from other adapters
+# Each adapter (mcp, cli, fastify, vercel) is independent.
+# Cross-adapter imports create coupling between transport layers.
+name: "No cross-adapter imports"
+description: "Adapter packages must not import from each other — only from @silkweave/core and @silkweave/auth"
+severity: error
+
+match:
+  from:
+    file_glob: "**/packages/{mcp,cli,fastify,vercel}/src/**"
+    kind: [function, class, interface, variable]
+  to:
+    file_glob: "**/packages/{mcp,cli,fastify,vercel}/src/**"
+    kind: [function, class, interface, variable]
+  max_distance: 1
+
+exempt:
+  # Allow imports within the same package (same adapter)
+  files: []

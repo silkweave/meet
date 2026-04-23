@@ -1,0 +1,15 @@
+# Rule: Adapters must not reach into auth provider internals
+# Auth exposes a public API via index.ts. Adapters should use that,
+# not import store implementations or provider internals directly.
+name: "No adapter imports auth internals"
+description: "Adapter packages must not import from @silkweave/auth provider internals (store, types, token)"
+severity: warning
+
+match:
+  from:
+    file_glob: "**/packages/{mcp,cli,fastify,vercel}/src/**"
+    kind: [function, class, interface, variable]
+  to:
+    file_glob: "**/packages/auth/src/provider/{store,types,token}*"
+    kind: [function, class, interface, variable]
+  max_distance: 1

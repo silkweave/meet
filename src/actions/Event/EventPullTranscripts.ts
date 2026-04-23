@@ -6,18 +6,17 @@ import { Participant, renderTranscriptMarkdown } from '../../lib/transcripts.js'
 
 export const EventPullTranscripts = createAction({
   name: 'eventPullTranscripts',
-  description: 'MCP-native polling for new Google Meet transcripts. On each call, returns transcripts generated since the last call (cursor stored locally per userId), then advances the cursor. First-time callers can pass `since` to seed the cursor; otherwise the last 24h are used. Idempotent: calling twice in a row returns an empty batch the second time.',
+  description: 'MCP-native polling for new Google Meet transcripts. On each call, returns transcripts generated since the last call (cursor stored in config per userEmail), then advances the cursor. First-time callers can pass `since` to seed the cursor; otherwise the last 24h are used. Idempotent: calling twice in a row returns an empty batch the second time. Impersonates `userEmail` via DWD.',
   input: z.object({
-    userId: z.string().optional().default('default'),
+    userEmail: z.string().describe('Workspace user email to impersonate via DWD'),
     since: z.string().optional().describe('Initial cursor (RFC3339) if no cursor has been stored yet. Defaults to now - 24h.'),
     includeMarkdown: z.boolean().optional().default(true).describe('Render each new transcript to markdown in the response.'),
     maxConferences: z.number().int().min(1).max(100).optional().default(25)
   }),
-  run: async ({ userId, since, includeMarkdown, maxConferences }) => {
-    const client = new MeetClient(userId)
-    const cursor = client.eventCursor ?? since ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  run: async ({ userEmail, since, includeMarkdown, maxConferences }) => {
+    const cursor = MeetClient.getEventCursor(userEmail) ?? since ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
 
-    return client.withAuth(async (auth) => {
+    return MeetClient.withAuth(userEmail, async (auth) => {
       const meet = google.meet({ version: 'v2', auth })
 
       const { data: conferencesData } = await meet.conferenceRecords.list({
@@ -76,7 +75,7 @@ export const EventPullTranscripts = createAction({
         }
       }
 
-      client.setEventCursor(newestEnd)
+      MeetClient.setEventCursor(userEmail, newestEnd)
       return { cursor: newestEnd, previousCursor: cursor, transcripts: results }
     })
   }
