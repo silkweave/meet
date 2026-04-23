@@ -1,6 +1,6 @@
 {
   "name": "@silkweave/meet",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Silkweave Google Meet MCP & CLI",
   "author": "Tobias Strebitzer <tobias.strebitzer@atomic.bi>",
   "license": "MIT",
@@ -12,8 +12,8 @@
   "main": "./build/index.mjs",
   "types": "./build/index.d.mts",
   "bin": {
-    "meet-cli": "./build/cli.mjs",
-    "meet-mcp": "./build/mcp.mjs"
+    "meet": "./build/mcp.mjs",
+    "meet-cli": "./build/cli.mjs"
   },
   "exports": {
     ".": {
