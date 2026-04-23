@@ -1,10 +1,9 @@
 import { spawn } from 'child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'fs'
-import { join } from 'path'
+import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { Message, PubSub, Subscription } from '@google-cloud/pubsub'
-import { google, meet_v2 } from 'googleapis'
+import { google } from 'googleapis'
 import { MeetClient, SERVICE_ACCOUNT_KEY_PATH, WatcherConfig } from '../classes/MeetClient.js'
-import { Participant, renderTranscriptMarkdown } from './transcripts.js'
+import { ingestTranscript } from './transcriptIngest.js'
 
 interface SubscriptionStatus {
   messagesReceived: number
@@ -195,79 +194,41 @@ class TranscriptWatcher {
   }
 
   private async processTranscript(userEmail: string, transcriptName: string): Promise<void> {
-    const match = transcriptName.match(/^(conferenceRecords\/[^/]+)\/transcripts\/([^/]+)$/)
-    if (!match) { throw new Error(`Unrecognised transcript resource name: ${transcriptName}`) }
-    const [, conferenceRecordName, transcriptId] = match
-
-    const fetched = await MeetClient.withAuth(userEmail, async (auth) => {
-      const meet = google.meet({ version: 'v2', auth })
-
-      const entries: meet_v2.Schema$TranscriptEntry[] = []
-      let entryPageToken: string | undefined
-      do {
-        const { data } = await meet.conferenceRecords.transcripts.entries.list({ parent: transcriptName, pageSize: 500, pageToken: entryPageToken })
-        if (data.transcriptEntries) { entries.push(...data.transcriptEntries) }
-        entryPageToken = data.nextPageToken ?? undefined
-      } while (entryPageToken)
-
-      const participants: Record<string, Participant> = {}
-      let participantPageToken: string | undefined
-      do {
-        const { data } = await meet.conferenceRecords.participants.list({ parent: conferenceRecordName, pageSize: 100, pageToken: participantPageToken })
-        for (const p of data.participants ?? []) {
-          if (p.name) { participants[p.name] = p }
-        }
-        participantPageToken = data.nextPageToken ?? undefined
-      } while (participantPageToken)
-
-      const [transcript, conference] = await Promise.all([
-        meet.conferenceRecords.transcripts.get({ name: transcriptName }).then((r) => r.data),
-        meet.conferenceRecords.get({ name: conferenceRecordName }).then((r) => r.data)
-      ])
-
-      let meetingCode: string | undefined
-      if (conference.space) {
-        try {
-          const { data } = await meet.spaces.get({ name: conference.space })
-          meetingCode = data.meetingCode ?? undefined
-        } catch { /* space lookup may fail if no longer accessible */ }
-      }
-
-      return { entries, participants, transcript, conference, meetingCode }
-    })
-
-    const markdown = renderTranscriptMarkdown(fetched.entries, fetched.participants)
-    const startTime = fetched.transcript.startTime ?? fetched.conference.startTime ?? new Date().toISOString()
-    const date = startTime.slice(0, 10)
-    const slug = sanitizeForFilename(fetched.meetingCode ?? conferenceRecordName.replace('conferenceRecords/', ''))
-    const file = join(this.config!.transcriptDir, `${date}_${slug}_${sanitizeForFilename(transcriptId)}.md`)
-    const body = buildMarkdownDocument({
-      conferenceRecordName,
+    const result = await ingestTranscript({
+      userEmail,
       transcriptName,
-      meetingCode: fetched.meetingCode,
-      startTime: fetched.transcript.startTime ?? null,
-      endTime: fetched.transcript.endTime ?? null,
-      markdown
+      options: { transcriptDir: this.config?.transcriptDir }
     })
-    writeFileSync(file, body, 'utf-8')
+
+    if (result.status === 'failed') {
+      throw new Error(result.error ?? 'transcript ingest failed')
+    }
 
     this.processed.add(transcriptName)
+
+    if (result.status !== 'saved' || !result.record || !result.filePath) { return }
+
     this.status.transcriptsSaved += 1
-    this.status.recent.unshift({ transcriptName, file, savedAt: new Date().toISOString(), userEmail })
+    this.status.recent.unshift({ transcriptName, file: result.filePath, savedAt: new Date().toISOString(), userEmail })
     if (this.status.recent.length > MAX_RECENT) { this.status.recent.length = MAX_RECENT }
 
     if (this.config?.onTranscriptCommand) {
+      const record = result.record
+      let markdown = ''
+      try { markdown = readFileSync(result.filePath, 'utf-8') } catch { /* best effort */ }
       const env = {
         ...process.env,
-        TRANSCRIPT_PATH: file,
+        TRANSCRIPT_PATH: result.filePath,
         TRANSCRIPT_RAW: markdown,
         TRANSCRIPT_NAME: transcriptName,
-        CONFERENCE_RECORD: conferenceRecordName,
-        MEET_CODE: fetched.meetingCode ?? '',
-        START_TIME: fetched.transcript.startTime ?? '',
-        END_TIME: fetched.transcript.endTime ?? '',
-        ENTRY_COUNT: String(fetched.entries.length),
-        DATE: date
+        CONFERENCE_RECORD: record.conferenceRecordName,
+        MEET_CODE: record.meetingCode,
+        START_TIME: record.startTimeIso,
+        END_TIME: record.endTimeIso,
+        ENTRY_COUNT: String(record.entryCount),
+        DATE: record.startTimeIso.slice(0, 10),
+        SUBJECT: record.subject,
+        CALENDAR_EVENT_ID: record.calendarEventId
       }
       const child = spawn(this.config.onTranscriptCommand, {
         shell: true,
@@ -314,33 +275,6 @@ function extractTranscriptName(message: { data?: string | null; attributes?: Rec
     if (idx >= 0) { return subject.slice(idx) }
   }
   return undefined
-}
-
-function sanitizeForFilename(input: string): string {
-  return input.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 64) || 'unknown'
-}
-
-function buildMarkdownDocument(params: {
-  conferenceRecordName: string
-  transcriptName: string
-  meetingCode?: string
-  startTime: string | null
-  endTime: string | null
-  markdown: string
-}): string {
-  const header = [
-    '# Meeting transcript',
-    '',
-    `- **Conference:** \`${params.conferenceRecordName}\``,
-    `- **Transcript:** \`${params.transcriptName}\``,
-    params.meetingCode ? `- **Meet code:** \`${params.meetingCode}\`` : null,
-    params.startTime ? `- **Start:** ${params.startTime}` : null,
-    params.endTime ? `- **End:** ${params.endTime}` : null,
-    '',
-    '---',
-    ''
-  ].filter((line) => line !== null).join('\n')
-  return `${header}${params.markdown}\n`
 }
 
 function errorMessage(err: unknown): string {

@@ -16,7 +16,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `@silkweave/meet` is a Google Meet API client exposed as both an **MCP server** (`meet-mcp` / `src/mcp.ts`) and a **CLI** (`meet-cli` / `src/cli.ts`). Auth is **exclusively** a Workspace service account with domain-wide delegation: no OAuth, no token registry, no interactive flow. The package is built on [silkweave](https://www.npmjs.com/package/silkweave): every tool is a `createAction()` (zod schema + `run`).
 
-The **MCP surface is deliberately narrow** — only tools for reading already-existing transcripts (`meetTranscriptList`, `meetTranscriptGet`) plus the lightweight `mcpStatus` tool. Everything that configures, manages, or writes state (Calendar browsing, conference/participant/recording/space lookups, Event subscription management, transcript watcher controls, Setup helpers) is **CLI-only**. The CLI exposes the full action surface.
+The **MCP surface is deliberately narrow**:
+- Live Google lookups: `meetTranscriptList`, `meetTranscriptGet`.
+- Persisted archive (local Orama DB): `transcriptList`, `transcriptGet`, `transcriptSearch`, `transcriptBackfill`.
+- Status: `mcpStatus`.
+
+Everything that configures subscriptions, controls the background watcher, or manages multi-user setup is **CLI-only**. The CLI exposes the full action surface.
 
 ### Entry Points
 
@@ -26,10 +31,12 @@ The **MCP surface is deliberately narrow** — only tools for reading already-ex
 
 ### Core — `src/classes/MeetClient.ts`
 
-All-static. No OAuth. Two on-disk artefacts:
+All-static. No OAuth. On-disk artefacts in `~/.silkweave-meet/`:
 
-- `~/.silkweave-meet/service-account.json` — DWD-enabled service account key (exported as `MeetClient.keyPath` / `SERVICE_ACCOUNT_KEY_PATH`).
-- `~/.silkweave-meet/config.json` — `{ users: string[], cursors?: Record<email, rfc3339>, watcher?: WatcherConfig }`.
+- `service-account.json` — DWD-enabled service account key (exported as `MeetClient.keyPath` / `SERVICE_ACCOUNT_KEY_PATH`).
+- `config.json` — `{ users: string[], cursors?: Record<email, rfc3339>, watcher?: WatcherConfig, openai?: OpenAIConfig }`.
+- `transcripts.msp` — persisted Orama DB (binary). Managed by `src/lib/transcriptDb.ts`.
+- `transcripts/<organizerEmail>/…` — default markdown archive (overridable via `watcher.transcriptDir`).
 
 Interface:
 
@@ -37,30 +44,41 @@ Interface:
 - `listUsers() / addUsers(emails) / removeUser(email)` — manage `config.users`.
 - `getEventCursor(email) / setEventCursor(email, cursor)` — per-user polling cursor.
 - `getWatcherConfig() / setWatcherConfig(patch)` — shared watcher config.
+- `getTranscriptDir()` — resolved transcript directory (watcher config or default).
+- `getOpenAIConfig() / setOpenAIConfig(patch)` — optional OpenAI config for embeddings. `OPENAI_API_KEY` / `OPENAI_EMBEDDING_MODEL` env vars act as fallbacks.
+- `transcriptDbPath` / `defaultTranscriptDir` / `configDir` — path accessors.
 
 ### Actions (`src/actions/`)
 
 Every action is `createAction({ input: z.object(...), run: async ({ input }) => ... })`. Every user-scoped action takes a **required** `userEmail: z.string()` — no default, no fallback. Groups:
 
 - `Calendar/` — upcoming meetings (`CalendarEventList`, `CalendarEventGet`).
-- `Meet/` — past conferences, participants, recordings, transcripts, spaces.
+- `Meet/` — past conferences, participants, recordings, transcripts, spaces. **Live API calls** — these hit Google, not the local archive.
 - `Event/` — transcript notifications:
-  - `EventPullTranscripts` — polling with cursor persisted in `config.cursors[email]`; idempotent.
+  - `EventPullTranscripts` — polling with cursor persisted in `config.cursors[email]`; idempotent. Does NOT write to the local archive — it's a stateless read. Use `transcriptBackfill` for persistence.
   - `EventSubscriptionCreate` / `EventSubscriptionCreateForUser` — Workspace Events subscriptions publishing to a Pub/Sub topic.
   - `EventSubscriptionList` / `EventSubscriptionDelete` — manage them.
-- `Transcript/` — `TranscriptWatchStart|Stop|Status`: control the background Pub/Sub watcher (no `userEmail` — the watcher is a singleton routing per-event). CLI-only.
+- `Transcript/` — two distinct groups:
+  - **Archive (MCP + CLI)**: `TranscriptList`, `TranscriptGet`, `TranscriptSearch` read from the local Orama DB. `TranscriptBackfill` ingests historical transcripts for every configured user (default: last 30 days).
+  - **Watcher (CLI-only)**: `TranscriptWatchStart|Stop|Status` control the background Pub/Sub consumer.
 - `Mcp/` — `McpStatus`: the single MCP-exposed health/status tool (also available in the CLI).
 - `Setup/` — **CLI-only** helpers (`SetupStatus`, `SetupSubscribeAll`) that iterate every user in the config. Registered directly in `src/cli.ts`, not `src/actions/index.ts`, so they don't ship over MCP.
 
-`src/actions/index.ts` exports two arrays: `actions` (the full set — imports and array alphabetical — used by the CLI) and `mcpActions` (the minimal MCP set: `McpStatus`, `MeetTranscriptGet`, `MeetTranscriptList`). When adding a new action:
+`src/actions/index.ts` exports two arrays: `actions` (the full set — used by the CLI) and `mcpActions` (the narrow MCP set: `McpStatus`, the live `MeetTranscript*`, and the archive `Transcript{Backfill,Get,List,Search}`). When adding a new action:
 
-- If it belongs on MCP (read-only, transcript-facing, or status), add it to both `actions` and `mcpActions`.
+- If it belongs on MCP (read-only transcript access, archive search, backfill, or status), add it to both `actions` and `mcpActions`.
 - If it is setup/configuration/management, add it to `actions` only so the CLI picks it up.
 - If it is a one-off CLI orchestration (like the Setup helpers), skip the index entirely and append it directly in `src/cli.ts`.
 
+### Transcript archive & ingest — `src/lib/transcriptDb.ts` + `transcriptIngest.ts` + `transcriptEnrich.ts`
+
+- **`transcriptDb`** — singleton wrapper around an Orama DB persisted as `~/.silkweave-meet/transcripts.msp` (binary). Schema keeps `startTime`/`endTime` as epoch ms for range filters, plus subject/description/attendees/markdown text for full-text, and a `vector[1536]` embedding field for optional vector/hybrid search. Every mutation (`upsert`, `remove`, `updateEmbedding`) persists to disk — single-writer assumption (MCP server + CLI should not both mutate simultaneously).
+- **`transcriptEnrich.enrichFromCalendar({ auth, meetingCode, conferenceStart, conferenceEnd })`** — deterministic Calendar match. Queries the user's primary calendar within ±1 day of the conference window and filters locally by `conferenceData.conferenceId === meetingCode`. No time-based guessing; no match = no enrichment (file is still saved, DB record is still inserted with empty subject/attendees).
+- **`transcriptIngest.ingestTranscript({ userEmail, transcriptName, options })`** — the single code path used by both the watcher and `transcriptBackfill`. Dedupes via `transcriptDb.has(transcriptId)`, fetches entries + participants + conference + space, enriches via Calendar, writes the markdown file under `<transcriptDir>/<organizerEmail>/…`, computes an OpenAI embedding if configured (else inserts a zero vector with `hasEmbedding=false`), and upserts the record.
+
 ### Transcript Watcher — `src/lib/transcriptWatcher.ts`
 
-Singleton long-running consumer. For each configured Pub/Sub subscription it opens a **StreamingPull** via `@google-cloud/pubsub` using the service-account key (required). On each message it reads `ce-source` to identify the originating Workspace Events subscription, looks up the owning user email in a `subscriptionId → email` cache (built at startup by impersonating each user in `config.users` and listing their subscriptions; rebuilt lazily on cache miss), then fetches the transcript by impersonating **that** user via DWD. Renders Markdown via `src/lib/transcripts.ts`, writes `YYYY-MM-DD_{meetCodeOrConferenceId}_{transcriptId}.md` to `transcriptDir`, and optionally runs `onTranscriptCommand` with `$TRANSCRIPT_PATH`, `$TRANSCRIPT_RAW`, `$MEET_CODE`, etc. in env. In-memory `processed` Set deduplicates within a run (important because N users in the same meeting produce N messages on the shared topic).
+Singleton long-running consumer. For each configured Pub/Sub subscription it opens a **StreamingPull** via `@google-cloud/pubsub` using the service-account key (required). On each message it reads `ce-source` to identify the originating Workspace Events subscription, looks up the owning user email in a `subscriptionId → email` cache (built at startup by impersonating each user in `config.users` and listing their subscriptions; rebuilt lazily on cache miss), then delegates to `ingestTranscript(...)` which impersonates that user via DWD for the fetch. In-memory `processed` Set deduplicates within a run; the shared DB dedupes across runs. Since subscriptions fire on the organizer, each meeting produces exactly one ingested record under the organizer's email.
 
 ### Scopes — `src/lib/scopes.ts`
 
@@ -116,7 +134,7 @@ All `mcp__roam-code__*` tools are available inside sub-agents (both `general-pur
 
 ## Testing via MCP
 
-This project is configured as an MCP server in `.mcp.json` (`pnpm tsx src/mcp.ts`). Claude Code can call the three Meet MCP tools (`mcp__meet__mcpStatus`, `mcp__meet__meetTranscriptList`, `mcp__meet__meetTranscriptGet`) directly to verify changes. For everything else (subscriptions, watcher, setup), run the action via the CLI: `pnpm tsx src/cli.ts <actionName> …`.
+This project is configured as an MCP server in `.mcp.json` (`pnpm tsx src/mcp.ts`). Claude Code can call the MCP-exposed tools directly — `mcp__meet__mcpStatus`, `mcp__meet__meetTranscriptList`, `mcp__meet__meetTranscriptGet`, `mcp__meet__transcriptList`, `mcp__meet__transcriptGet`, `mcp__meet__transcriptSearch`, `mcp__meet__transcriptBackfill` — to verify changes. For everything else (subscriptions, watcher, setup), run the action via the CLI: `pnpm tsx src/cli.ts <actionName> …`.
 
 **Restarting after code changes:** The MCP server runs as a child process of Claude Code. There is no longer an `mcpRestart` tool — ask the user to restart the MCP connection (or kill the process) so code changes are picked up.
 

@@ -11,20 +11,29 @@ export interface WatcherConfig {
   autoStart?: boolean
 }
 
+export interface OpenAIConfig {
+  apiKey?: string
+  embeddingModel?: string
+}
+
 export interface Config {
   users: string[]
   cursors?: Record<string, string>
   watcher?: WatcherConfig
+  openai?: OpenAIConfig
 }
 
 const CONFIG_DIR = join(homedir(), '.silkweave-meet')
 export const SERVICE_ACCOUNT_KEY_PATH = join(CONFIG_DIR, 'service-account.json')
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json')
+const TRANSCRIPT_DB_PATH = join(CONFIG_DIR, 'transcripts.msp')
+const DEFAULT_TRANSCRIPT_DIR = join(CONFIG_DIR, 'transcripts')
+const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small'
 
 function readConfig(): Config {
   if (!existsSync(CONFIG_PATH)) { return { users: [] } }
   const parsed = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) as Partial<Config>
-  return { users: parsed.users ?? [], cursors: parsed.cursors, watcher: parsed.watcher }
+  return { users: parsed.users ?? [], cursors: parsed.cursors, watcher: parsed.watcher, openai: parsed.openai }
 }
 
 function writeConfig(next: Config): void {
@@ -35,6 +44,9 @@ function writeConfig(next: Config): void {
 export class MeetClient {
   public static get configPath(): string { return CONFIG_PATH }
   public static get keyPath(): string { return SERVICE_ACCOUNT_KEY_PATH }
+  public static get configDir(): string { return CONFIG_DIR }
+  public static get transcriptDbPath(): string { return TRANSCRIPT_DB_PATH }
+  public static get defaultTranscriptDir(): string { return DEFAULT_TRANSCRIPT_DIR }
 
   public static getConfig(): Config { return readConfig() }
 
@@ -75,11 +87,30 @@ export class MeetClient {
     const config = readConfig()
     const current: WatcherConfig = config.watcher ?? {
       pubsubSubscriptions: [],
-      transcriptDir: join(CONFIG_DIR, 'transcripts')
+      transcriptDir: DEFAULT_TRANSCRIPT_DIR
     }
     const watcher: WatcherConfig = { ...current, ...patch }
     writeConfig({ ...config, watcher })
     return watcher
+  }
+
+  public static getTranscriptDir(): string {
+    return MeetClient.getWatcherConfig()?.transcriptDir ?? DEFAULT_TRANSCRIPT_DIR
+  }
+
+  public static getOpenAIConfig(): OpenAIConfig {
+    const stored = readConfig().openai ?? {}
+    return {
+      apiKey: stored.apiKey ?? process.env.OPENAI_API_KEY,
+      embeddingModel: stored.embeddingModel ?? process.env.OPENAI_EMBEDDING_MODEL ?? DEFAULT_EMBEDDING_MODEL
+    }
+  }
+
+  public static setOpenAIConfig(patch: Partial<OpenAIConfig>): OpenAIConfig {
+    const config = readConfig()
+    const next: OpenAIConfig = { ...(config.openai ?? {}), ...patch }
+    writeConfig({ ...config, openai: next })
+    return next
   }
 
   public static async withAuth<T>(userEmail: string, fn: (auth: JWT) => Promise<T>): Promise<T> {

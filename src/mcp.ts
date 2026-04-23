@@ -2,6 +2,7 @@ import { silkweave } from '@silkweave/core'
 import { stdio } from '@silkweave/mcp'
 import { mcpActions } from './actions/index.js'
 import { MeetClient } from './classes/MeetClient.js'
+import { transcriptDb } from './lib/transcriptDb.js'
 import { VERSION } from './lib/version.js'
 import { transcriptWatcher } from './lib/transcriptWatcher.js'
 
@@ -10,6 +11,10 @@ async function main() {
     .adapter(stdio())
     .actions(mcpActions)
     .start()
+
+  try { await transcriptDb.init() } catch (err) {
+    process.stderr.write(`[silkweave-meet] transcriptDb init failed: ${(err as Error).message}\n`)
+  }
 
   await maybeAutoStartWatcher()
 }

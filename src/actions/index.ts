@@ -13,6 +13,11 @@ import { MeetRecordingList } from './Meet/MeetRecordingList.js'
 import { MeetSpaceGet } from './Meet/MeetSpaceGet.js'
 import { MeetTranscriptGet } from './Meet/MeetTranscriptGet.js'
 import { MeetTranscriptList } from './Meet/MeetTranscriptList.js'
+import { TranscriptBackfill } from './Transcript/TranscriptBackfill.js'
+import { TranscriptGet } from './Transcript/TranscriptGet.js'
+import { TranscriptList } from './Transcript/TranscriptList.js'
+import { TranscriptReembed } from './Transcript/TranscriptReembed.js'
+import { TranscriptSearch } from './Transcript/TranscriptSearch.js'
 import { TranscriptWatchStart } from './Transcript/TranscriptWatchStart.js'
 import { TranscriptWatchStatus } from './Transcript/TranscriptWatchStatus.js'
 import { TranscriptWatchStop } from './Transcript/TranscriptWatchStop.js'
@@ -33,6 +38,11 @@ export const actions = [
   MeetSpaceGet,
   MeetTranscriptGet,
   MeetTranscriptList,
+  TranscriptBackfill,
+  TranscriptGet,
+  TranscriptList,
+  TranscriptReembed,
+  TranscriptSearch,
   TranscriptWatchStart,
   TranscriptWatchStatus,
   TranscriptWatchStop
@@ -41,5 +51,10 @@ export const actions = [
 export const mcpActions = [
   McpStatus,
   MeetTranscriptGet,
-  MeetTranscriptList
+  MeetTranscriptList,
+  TranscriptBackfill,
+  TranscriptGet,
+  TranscriptList,
+  TranscriptReembed,
+  TranscriptSearch
 ]

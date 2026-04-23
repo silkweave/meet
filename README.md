@@ -9,9 +9,11 @@ Authentication is **exclusively** through a Google Workspace service account wit
 - List upcoming meetings from Google Calendar and past Google Meet conference records
 - Retrieve conference details, participants, recordings, and transcripts (impersonating any Workspace user via DWD)
 - Render transcripts as clean Markdown (consecutive utterances per speaker merged)
+- Persistent transcript archive with full-text (and optional OpenAI-powered vector/hybrid) search — every saved transcript is enriched with its Calendar event (subject, description, attendees) and indexed into a local Orama database
 - Two ways to consume new-transcript notifications:
   - `eventPullTranscripts` — on-demand polling with a persisted cursor (idempotent)
   - Built-in background watcher (`transcriptWatch*`) — streams from Pub/Sub and writes Markdown files, with optional per-save shell command
+- `transcriptBackfill` — one-shot catch-up across all users for the past N days
 
 ## Quick Start
 
@@ -80,6 +82,10 @@ Everything non-secret lives in `~/.silkweave-meet/config.json`:
   },
   "cursors": {
     "alice@company.com": "2026-04-22T14:30:00Z"
+  },
+  "openai": {
+    "apiKey": "sk-...",
+    "embeddingModel": "text-embedding-3-small"
   }
 }
 ```
@@ -87,12 +93,25 @@ Everything non-secret lives in `~/.silkweave-meet/config.json`:
 - `users` — Workspace user emails the tool is allowed to impersonate. Populated by `setupSubscribeAll --users=a,b,c` or edited manually.
 - `watcher` — persisted watcher config, written by `transcriptWatchStart`.
 - `cursors` — per-user polling cursors for `eventPullTranscripts`.
+- `openai` — optional. Enables vector/hybrid search over the persisted transcript archive. `OPENAI_API_KEY` and `OPENAI_EMBEDDING_MODEL` env vars are used as fallbacks.
+
+### Archive files & database
+
+- Ingested transcripts are written to `<transcriptDir>/<organizerEmail>/YYYY-MM-DD_{meetCodeOrConferenceId}_{transcriptId}.md`. Because each saved file is fetched via the organizer's own subscription, the top-level folder makes it easy to browse "meetings I ran".
+- A companion Orama index at `~/.silkweave-meet/transcripts.msp` holds the searchable metadata (subject, description, attendees, date range, file path, embedding). It is the source of truth for `transcriptList` / `transcriptGet` / `transcriptSearch`.
 
 ## Tools Reference
 
 Every action that reads Google data takes a required `userEmail` — the Workspace user the service account impersonates for that call. Permissions match exactly what that user can see.
 
-The **MCP surface is intentionally small**: only `meetTranscriptList`, `meetTranscriptGet`, and `mcpStatus` are exposed over MCP. All other tools listed below are **CLI-only** (via `meet-cli`). This keeps MCP focused on consuming already-existing transcripts; subscription management, the background watcher, and multi-user setup all live in the CLI.
+The **MCP surface is intentionally narrow**: only the read-only transcript tools plus `transcriptBackfill` and `mcpStatus` are exposed over MCP. Everything that manages configuration, subscriptions, or the background watcher is **CLI-only** (via `meet-cli`).
+
+MCP-exposed tools:
+
+- `meetTranscriptList` / `meetTranscriptGet` — live lookup against the Google Meet API.
+- `transcriptList` / `transcriptGet` / `transcriptSearch` — read from the persisted local archive (no Google round-trip; works offline for previously-ingested transcripts).
+- `transcriptBackfill` — catch-up ingest across all configured users (default: last 30 days). Dedupes by `transcriptId`.
+- `mcpStatus` — health & status.
 
 ### Upcoming meetings — `Calendar*` (CLI-only)
 
@@ -101,7 +120,7 @@ The **MCP surface is intentionally small**: only `meetTranscriptList`, `meetTran
 | `calendarEventList` | List Calendar events on the user's primary calendar (optionally filtered to Meet-enabled ones). |
 | `calendarEventGet` | Get one event with Meet join info. |
 
-### Past meetings & transcripts — `Meet*`
+### Past meetings & transcripts — `Meet*` (live Google API)
 
 `meetTranscriptList` and `meetTranscriptGet` are available on **both MCP and CLI**. The rest are CLI-only.
 
@@ -114,6 +133,17 @@ The **MCP surface is intentionally small**: only `meetTranscriptList`, `meetTran
 | `meetParticipantList` | CLI | List participants of a conference. |
 | `meetRecordingList` | CLI | List recording artifacts (Drive links). |
 | `meetSpaceGet` | CLI | Resolve a space by `spaces/{id}` or meeting code. |
+
+### Persisted transcript archive — `Transcript*` (local Orama DB)
+
+Reads from `~/.silkweave-meet/transcripts.msp`; populated by the background watcher (live) and `transcriptBackfill` (historical). Every record is enriched with its Calendar event (subject, description, attendees) — matching is deterministic via `conferenceData.conferenceId` → Meet space `meetingCode`, never time-guessing.
+
+| Tool | Surface | Purpose |
+| --- | --- | --- |
+| `transcriptList` | MCP + CLI | List persisted transcripts, newest first, filterable by organizer, attendee, and date range. |
+| `transcriptGet` | MCP + CLI | Fetch a single persisted transcript by id (or full resource name); returns metadata plus the rendered markdown body read from disk. |
+| `transcriptSearch` | MCP + CLI | Keyword search over subject / description / full transcript body. With `mode=vector` or `mode=hybrid` and an OpenAI key configured, runs semantic or hybrid search. |
+| `transcriptBackfill` | MCP + CLI | Iterate every configured user, list conferences since `startTime` (default: 30 days ago), ingest any transcripts not already in the database. Dedupes by `transcriptId`. |
 
 ### Notifications — `Event*` (CLI-only)
 
@@ -135,7 +165,7 @@ Singleton consumer that streams events from a Pub/Sub subscription (Pub/Sub auth
 | `transcriptWatchStop` | Stop the watcher. Pass `disableAutoStart=true` to also disable boot-time auto-start. |
 | `transcriptWatchStatus` | Current status: running flag, per-subscription counters, known subscription owners, recent saved files. |
 
-When `autoStart: true` is persisted, the MCP server resumes the watcher on every boot. Each saved file is named `YYYY-MM-DD_{meetCodeOrConferenceId}_{transcriptId}.md` so files sort chronologically.
+When `autoStart: true` is persisted, the MCP server resumes the watcher on every boot. Each saved file is written to `<transcriptDir>/<organizerEmail>/YYYY-MM-DD_{meetCodeOrConferenceId}_{transcriptId}.md` and simultaneously inserted into the local search index.
 
 ### Multi-user setup — `Setup*` (CLI-only)
 
@@ -204,6 +234,8 @@ The `onTranscriptCommand` runs via `spawn(..., { shell: true })` with these envi
 | `$START_TIME` / `$END_TIME` | Transcript start/end (RFC3339) |
 | `$ENTRY_COUNT` | Number of transcript entries |
 | `$DATE` | `YYYY-MM-DD` prefix used in the filename |
+| `$SUBJECT` | Calendar event subject if matched, else empty |
+| `$CALENDAR_EVENT_ID` | Calendar event id if matched, else empty |
 
 For very long transcripts, prefer reading from `$TRANSCRIPT_PATH` — environment size is bounded (~256KB on macOS).
 
