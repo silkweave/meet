@@ -1,6 +1,7 @@
 .vscode/
 src/
 .mcp.json
+.roam
 CLAUDE.md
 .claude/settings.local.json
 eslint.config.mjs
