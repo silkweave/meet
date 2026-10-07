@@ -1,4 +1,4 @@
-import { google } from 'googleapis'
+import { calendar_v3, google } from 'googleapis'
 import { JWT } from 'google-auth-library'
 
 export interface CalendarEnrichment {
@@ -28,16 +28,21 @@ export async function enrichFromCalendar(params: {
   const timeMax = new Date(anchorEnd + ONE_DAY_MS).toISOString()
 
   const calendar = google.calendar({ version: 'v3', auth })
-  const { data } = await calendar.events.list({
-    calendarId: 'primary',
-    timeMin,
-    timeMax,
-    singleEvents: true,
-    maxResults: 50,
-    orderBy: 'startTime'
-  })
-
-  const match = (data.items ?? []).find((e) => e.conferenceData?.conferenceId === meetingCode)
+  let match: calendar_v3.Schema$Event | undefined
+  let pageToken: string | undefined
+  do {
+    const { data } = await calendar.events.list({
+      calendarId: 'primary',
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      maxResults: 250,
+      orderBy: 'startTime',
+      pageToken
+    })
+    match = (data.items ?? []).find((e) => eventMeetCode(e) === meetingCode)
+    pageToken = data.nextPageToken ?? undefined
+  } while (!match && pageToken)
   if (!match) { return undefined }
 
   return {
@@ -49,6 +54,14 @@ export async function enrichFromCalendar(params: {
     eventStart: match.start?.dateTime ?? match.start?.date ?? undefined,
     eventEnd: match.end?.dateTime ?? match.end?.date ?? undefined
   }
+}
+
+// Events rescheduled or created by booking tools can carry the Meet link in
+// `conferenceData.entryPoints` / `hangoutLink` without a `conferenceId`.
+export function eventMeetCode(event: calendar_v3.Schema$Event): string | undefined {
+  if (event.conferenceData?.conferenceId) { return event.conferenceData.conferenceId }
+  const uri = event.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri ?? event.hangoutLink
+  return uri?.match(/meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3})/)?.[1]
 }
 
 function stripHtml(input: string): string {
