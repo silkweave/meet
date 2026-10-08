@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-`@silkweave/meet` is a Google Meet API client exposed as both an **MCP server** (`meet-mcp` / `src/mcp.ts`) and a **CLI** (`meet-cli` / `src/cli.ts`). Auth is **exclusively** a Workspace service account with domain-wide delegation: no OAuth, no token registry, no interactive flow. The package is built on [silkweave](https://www.npmjs.com/package/silkweave): every tool is a `createAction()` (zod schema + `run`).
+`@silkweave/meet` is a Google Meet API client exposed as both an **MCP server** (bin `meet` / `src/mcp.ts`) and a **CLI** (`meet-cli` / `src/cli.ts`). Auth is **exclusively** a Workspace service account with domain-wide delegation: no OAuth, no token registry, no interactive flow. The package is built on [silkweave](https://www.npmjs.com/package/silkweave): every tool is a `createAction()` (zod schema + `run`).
 
 The **MCP surface is deliberately narrow**:
 - Live Google lookups: `meetTranscriptList`, `meetTranscriptGet`.
@@ -49,7 +49,7 @@ Interface:
 - `getWatcherConfig() / setWatcherConfig(patch)` — shared watcher config.
 - `getTranscriptDir()` — resolved transcript directory (watcher config or default).
 - `getOpenAIConfig() / setOpenAIConfig(patch)` — optional OpenAI config for embeddings. `OPENAI_API_KEY` / `OPENAI_EMBEDDING_MODEL` env vars act as fallbacks.
-- `transcriptDbPath` / `defaultTranscriptDir` / `configDir` — path accessors.
+- `transcriptDbPath` / `legacyTranscriptDbPath` / `defaultTranscriptDir` / `configDir` — path accessors.
 
 ### Actions (`src/actions/`)
 
@@ -77,11 +77,16 @@ Every action is `createAction({ input: z.object(...), run: async ({ input }) => 
 
 - **`transcriptDb`** — singleton wrapper around a SQLite DB (`node:sqlite` `DatabaseSync`) at `~/.silkweave-meet/transcripts.db`, opened lazily once per process. **WAL mode + `busy_timeout`**: many processes (MCP sessions, watcher, CLI backfill) can read and write concurrently; every write is a per-row upsert committed immediately (`save()` and `upsert`'s `skipSave` are compatibility no-ops; `upsertMany` / `updateEmbeddings` batch inside `BEGIN IMMEDIATE`). Table `transcripts` keeps `start_time`/`end_time` as epoch ms, `attendees` as a JSON array, and the embedding as a Float32 BLOB (`NULL` = no embedding; `hasEmbedding` is derived; stored vectors are readable via `get`). Full-text is an external-content **FTS5** table (`porter unicode61`, kept in sync by triggers); user queries are tokenised and each token quoted as a prefix term, so input can never cause an FTS syntax error. Fulltext results are ordered by start time (score = BM25 with subject/description/text boosts 3/2/1); vector search is brute-force cosine in JS (default similarity 0.8); hybrid = 0.5 × normalised BM25 + 0.5 × cosine. On first open it auto-migrates the legacy Orama `transcripts.msp` (inside `BEGIN IMMEDIATE`, without embeddings — run `transcript-reembed` after) and records `meta.migrated_from_orama`. `@orama/*` stay as dependencies only for that migration.
 - **`transcriptEnrich.enrichFromCalendar({ auth, meetingCode, conferenceStart, conferenceEnd })`** — deterministic Calendar match. Queries the user's primary calendar within ±1 day of the conference window and filters locally by `eventMeetCode(event) === meetingCode` (`conferenceData.conferenceId`, else the code parsed from the video entry point URI or `hangoutLink`), paging through all results. No time-based guessing; no match = no enrichment (file is still saved, DB record is still inserted with empty subject/attendees).
-- **`transcriptIngest.ingestTranscript({ userEmail, transcriptName, options })`** — the single code path used by both the watcher and `transcriptBackfill`. Dedupes via `transcriptDb.has(transcriptId)`, fetches entries + participants + conference + space, enriches via Calendar, writes the markdown file under `<transcriptDir>/<organizerEmail>/…`, computes an OpenAI embedding if configured (else inserts a zero vector with `hasEmbedding=false`), and upserts the record.
+- **`transcriptIngest.ingestTranscript({ userEmail, transcriptName, options })`** — the single code path used by both the watcher and `transcriptBackfill`. Dedupes via `transcriptDb.has(transcriptId)`, fetches entries + participants + conference + space, enriches via Calendar, writes the markdown file under `<transcriptDir>/<organizerEmail>/…`, computes an OpenAI embedding if configured (else passes a zero vector with `hasEmbedding=false`, stored as `NULL`), and upserts the record.
 
 ### Transcript Watcher — `src/lib/transcriptWatcher.ts`
 
 Singleton long-running consumer. For each configured Pub/Sub subscription it opens a **StreamingPull** via `@google-cloud/pubsub` using the service-account key (required). On each message it reads `ce-source` to identify the originating Workspace Events subscription, looks up the owning user email in a `subscriptionId → email` cache (built at startup by impersonating each user in `config.users` and listing their subscriptions; rebuilt lazily on cache miss), then delegates to `ingestTranscript(...)` which impersonates that user via DWD for the fetch. In-memory `processed` Set deduplicates within a run; the shared DB dedupes across runs. Since subscriptions fire on the organizer, each meeting produces exactly one ingested record under the organizer's email.
+
+### Known limitations
+
+- `config.json` writes (cursors, watcher config) are read-modify-write without locking; concurrent writers from several processes can lose an update. Low frequency, left as is.
+- Every Claude session with `watcher.autoStart: true` runs its own watcher on the same Pub/Sub subscription. Safe (idempotent upserts into the shared SQLite archive) but redundant; a single dedicated watcher with `autoStart: false` for interactive sessions is cleaner.
 
 ### Scopes — `src/lib/scopes.ts`
 
@@ -101,13 +106,10 @@ The single DWD scope list applied by `MeetClient.withAuth`. Adding a new Google 
 ### Code Quality Metrics
 
 **Do NOT use `roam health` as a quality metric** for this project. It penalizes
-architectural patterns that are correct for a multi-package library toolkit
-(adapter hubs → bottlenecks, disconnected packages → low connectivity,
-public API exports → "dead" symbols).
+intentional patterns (the action registry as a hub, public library exports → "dead" symbols).
 
 Use these instead:
 - `roam fitness` - metric thresholds + trend guards in `.roam/fitness.yaml` (CI-friendly, exit 1 on failure)
-- `roam rules --ci` - custom architecture rules in `.roam/rules/` (layer violations, adapter isolation)
 - `roam check-rules --profile minimal` - built-in structural rules with false-positive-prone checks excluded
 - `roam complexity --threshold 15` - function-level cognitive complexity
 - `roam vibe-check` - AI rot score (target: < 10)

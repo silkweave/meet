@@ -54,13 +54,13 @@ That's all the auth configuration. No env vars, no OAuth flow.
   "mcpServers": {
     "meet": {
       "command": "npx",
-      "args": ["-y", "-p", "@silkweave/meet", "meet-mcp"]
+      "args": ["-y", "@silkweave/meet"]
     }
   }
 }
 ```
 
-The package ships two bins: `meet-mcp` (stdio MCP server) and `meet-cli` (same action set as direct commands).
+The package ships two bins: `meet` (stdio MCP server, the default for `npx @silkweave/meet`) and `meet-cli` (full action set as direct commands). Requires Node.js ≥ 22.13.
 
 ### 4. Try a call
 
@@ -100,9 +100,9 @@ Everything non-secret lives in `~/.silkweave-meet/config.json`:
 
 - Ingested transcripts are written to `<transcriptDir>/<organizerEmail>/YYYY-MM-DD_{meetCodeOrConferenceId}_{transcriptId}.md`. Because each saved file is fetched via the organizer's own subscription, the top-level folder makes it easy to browse "meetings I ran".
 - A companion SQLite database at `~/.silkweave-meet/transcripts.db` (WAL mode, plus `-wal`/`-shm` side files) holds the searchable metadata (subject, description, attendees, date range, file path, embedding) with an FTS5 full-text index. It is the source of truth for `transcriptList` / `transcriptGet` / `transcriptSearch`. Several processes (MCP sessions, the watcher, CLI backfills) can read and write it at the same time.
-- Requires Node.js ≥ 22.13 (uses the built-in `node:sqlite`).
+- Uses the built-in `node:sqlite` (hence Node.js ≥ 22.13); no native dependencies.
 
-> **Upgrading from 2.1.x:** 2.2.0 migrates the old Orama archive (`transcripts.msp`) into SQLite automatically on first start. Embeddings are not carried over, so run `meet-cli transcript-reembed` once afterwards. The `.msp` file is left in place as a rollback path and can be deleted once you're happy.
+> **Upgrading from 2.1.x:** 2.2.0 migrates the old Orama archive (`transcripts.msp`) into SQLite automatically on first start. Embeddings are not carried over, so run `meet-cli transcript-reembed` once afterwards. Any command that reads the archive (e.g. `meet-cli transcript-list`) triggers it; `mcp-status` does not. The `.msp` file is left in place as a rollback path and can be deleted once you're happy.
 
 ## Tools Reference
 
@@ -148,7 +148,7 @@ Reads from `~/.silkweave-meet/transcripts.db`; populated by the background watch
 | --- | --- | --- |
 | `transcriptList` | MCP + CLI | List persisted transcripts, newest first, filterable by organizer, attendee, and date range. |
 | `transcriptGet` | MCP + CLI | Fetch a single persisted transcript by id (or full resource name); returns metadata plus the rendered markdown body read from disk. |
-| `transcriptSearch` | MCP + CLI | Keyword search over subject / description / full transcript body. With `mode=vector` or `mode=hybrid` and an OpenAI key configured, runs semantic or hybrid search. |
+| `transcriptSearch` | MCP + CLI | Keyword search over subject / description / full transcript body. With `mode=vector` or `mode=hybrid` and an OpenAI key configured, runs semantic or hybrid search. `similarity` defaults to 0.8, which is strict for `text-embedding-3-small` (typical query↔transcript cosine is 0.3–0.5); pass e.g. `similarity=0.3` for broader semantic matches. |
 | `transcriptBackfill` | MCP + CLI | Iterate every configured user, list conferences since `startTime` (default: 30 days ago), ingest any transcripts not already in the database. Dedupes by `transcriptId`. |
 | `transcriptEnrich` | MCP + CLI | Re-run Calendar enrichment for every archived transcript without a Calendar match (or a single `transcriptId`), then rewrite its record and Markdown file. Uses only the stored meet code and times plus Calendar, so it works for meetings past Meet's retention window. Enriched transcripts are re-embedded when OpenAI is configured. |
 | `transcriptReembed` | MCP + CLI | Compute embeddings for records ingested without one (`force=true` re-embeds everything). Requires an OpenAI key. |
@@ -226,7 +226,7 @@ npx -p @silkweave/meet meet-cli transcript-watch-start \
 
 User-level subscriptions expire (Google's max TTL applies). Re-run `setup-subscribe-all` on a schedule (cron / launchd) to refresh any that have expired; existing valid ones are skipped.
 
-User-level subscriptions capture `transcript.v2.fileGenerated` events for meetings the user **owns *or* is merely invited to** — that is the only non-owner event the Workspace Events API delivers, and it's exactly the one we want. Expect duplicates when multiple team members are in the same meeting; the watcher dedupes by `transcriptId` in memory per run.
+User-level subscriptions capture `transcript.v2.fileGenerated` events for meetings the user **owns *or* is merely invited to** — that is the only non-owner event the Workspace Events API delivers, and it's exactly the one we want. Expect duplicates when multiple team members are in the same meeting; the watcher dedupes by `transcriptId` (in memory per run, and against the archive across runs).
 
 ## Shell command env vars
 
