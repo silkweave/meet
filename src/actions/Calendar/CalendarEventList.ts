@@ -2,6 +2,7 @@ import { createAction } from '@silkweave/core'
 import { google } from 'googleapis'
 import z from 'zod'
 import { MeetClient } from '../../classes/MeetClient.js'
+import { eventMeetCode } from '../../lib/transcriptEnrich.js'
 
 export const CalendarEventList = createAction({
   name: 'calendarEventList',
@@ -39,7 +40,7 @@ export const CalendarEventList = createAction({
           attendees: e.attendees,
           htmlLink: e.htmlLink,
           meetUri: entryPoint?.uri,
-          meetCode: e.conferenceData?.conferenceId,
+          meetCode: eventMeetCode(e),
           hangoutLink: e.hangoutLink
         }
       })
