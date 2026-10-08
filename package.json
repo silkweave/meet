@@ -9,6 +9,9 @@
     "url": "git+ssh://git@github.com/silkweave/meet.git"
   },
   "type": "module",
+  "files": [
+    "build"
+  ],
   "engines": {
     "node": ">=22.13"
   },
