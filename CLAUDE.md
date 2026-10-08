@@ -159,6 +159,7 @@ pnpm publish --no-git-checks
 - publish: manual (`pnpm publish --no-git-checks` after version bump)
 - docs: single CLAUDE.md + README.md
 - frontend_smoke: n/a
+- co_authored_by: no (global)
 
 ## Wrap-Up Checklist
 
