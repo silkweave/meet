@@ -9,7 +9,7 @@ Authentication is **exclusively** through a Google Workspace service account wit
 - List upcoming meetings from Google Calendar and past Google Meet conference records
 - Retrieve conference details, participants, recordings, and transcripts (impersonating any Workspace user via DWD)
 - Render transcripts as clean Markdown (consecutive utterances per speaker merged)
-- Persistent transcript archive with full-text (and optional OpenAI-powered vector/hybrid) search — every saved transcript is enriched with its Calendar event (subject, description, attendees) and indexed into a local Orama database
+- Persistent transcript archive with full-text (and optional OpenAI-powered vector/hybrid) search — every saved transcript is enriched with its Calendar event (subject, description, attendees) and indexed into a local SQLite database
 - Two ways to consume new-transcript notifications:
   - `eventPullTranscripts` — on-demand polling with a persisted cursor (idempotent)
   - Built-in background watcher (`transcriptWatch*`) — streams from Pub/Sub and writes Markdown files, with optional per-save shell command
@@ -99,7 +99,10 @@ Everything non-secret lives in `~/.silkweave-meet/config.json`:
 ### Archive files & database
 
 - Ingested transcripts are written to `<transcriptDir>/<organizerEmail>/YYYY-MM-DD_{meetCodeOrConferenceId}_{transcriptId}.md`. Because each saved file is fetched via the organizer's own subscription, the top-level folder makes it easy to browse "meetings I ran".
-- A companion Orama index at `~/.silkweave-meet/transcripts.msp` holds the searchable metadata (subject, description, attendees, date range, file path, embedding). It is the source of truth for `transcriptList` / `transcriptGet` / `transcriptSearch`.
+- A companion SQLite database at `~/.silkweave-meet/transcripts.db` (WAL mode, plus `-wal`/`-shm` side files) holds the searchable metadata (subject, description, attendees, date range, file path, embedding) with an FTS5 full-text index. It is the source of truth for `transcriptList` / `transcriptGet` / `transcriptSearch`. Several processes (MCP sessions, the watcher, CLI backfills) can read and write it at the same time.
+- Requires Node.js ≥ 22.13 (uses the built-in `node:sqlite`).
+
+> **Upgrading from 2.1.x:** 2.2.0 migrates the old Orama archive (`transcripts.msp`) into SQLite automatically on first start. Embeddings are not carried over, so run `meet-cli transcript-reembed` once afterwards. The `.msp` file is left in place as a rollback path and can be deleted once you're happy.
 
 ## Tools Reference
 
@@ -137,9 +140,9 @@ MCP-exposed tools:
 | `meetRecordingList` | CLI | List recording artifacts (Drive links). |
 | `meetSpaceGet` | CLI | Resolve a space by `spaces/{id}` or meeting code. |
 
-### Persisted transcript archive — `Transcript*` (local Orama DB)
+### Persisted transcript archive — `Transcript*` (local SQLite DB)
 
-Reads from `~/.silkweave-meet/transcripts.msp`; populated by the background watcher (live) and `transcriptBackfill` (historical). Every record is enriched with its Calendar event (subject, description, attendees) — matching is deterministic: the event's Meet code (`conferenceData.conferenceId`, else the Meet link in its video entry point or `hangoutLink`) must equal the Meet space `meetingCode`, never time-guessing.
+Reads from `~/.silkweave-meet/transcripts.db`; populated by the background watcher (live) and `transcriptBackfill` (historical). Every record is enriched with its Calendar event (subject, description, attendees) — matching is deterministic: the event's Meet code (`conferenceData.conferenceId`, else the Meet link in its video entry point or `hangoutLink`) must equal the Meet space `meetingCode`, never time-guessing.
 
 | Tool | Surface | Purpose |
 | --- | --- | --- |

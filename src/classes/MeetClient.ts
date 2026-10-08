@@ -26,7 +26,8 @@ export interface Config {
 const CONFIG_DIR = join(homedir(), '.silkweave-meet')
 export const SERVICE_ACCOUNT_KEY_PATH = join(CONFIG_DIR, 'service-account.json')
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json')
-const TRANSCRIPT_DB_PATH = join(CONFIG_DIR, 'transcripts.msp')
+const TRANSCRIPT_DB_PATH = join(CONFIG_DIR, 'transcripts.db')
+const LEGACY_TRANSCRIPT_DB_PATH = join(CONFIG_DIR, 'transcripts.msp')
 const DEFAULT_TRANSCRIPT_DIR = join(CONFIG_DIR, 'transcripts')
 const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small'
 
@@ -46,6 +47,8 @@ export class MeetClient {
   public static get keyPath(): string { return SERVICE_ACCOUNT_KEY_PATH }
   public static get configDir(): string { return CONFIG_DIR }
   public static get transcriptDbPath(): string { return TRANSCRIPT_DB_PATH }
+  /** Legacy Orama archive; only read once to migrate into the SQLite DB. */
+  public static get legacyTranscriptDbPath(): string { return LEGACY_TRANSCRIPT_DB_PATH }
   public static get defaultTranscriptDir(): string { return DEFAULT_TRANSCRIPT_DIR }
 
   public static getConfig(): Config { return readConfig() }

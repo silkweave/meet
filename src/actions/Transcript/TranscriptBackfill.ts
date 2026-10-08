@@ -109,10 +109,7 @@ export const TranscriptBackfill = createAction({
     const pool = Math.min(concurrency, Math.max(1, toFetch.length))
     await Promise.all(Array.from({ length: pool }, () => worker()))
 
-    for (const p of prepared) {
-      await transcriptDb.upsert(p.record, { skipSave: true })
-    }
-    if (prepared.length > 0) { await transcriptDb.save() }
+    await transcriptDb.upsertMany(prepared.map((p) => p.record))
 
     const perUser = emails.map((userEmail) => {
       const d = perUserDiscovered[userEmail] ?? { conferences: 0, transcriptsSeen: 0 }

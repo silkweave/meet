@@ -1,6 +1,6 @@
 # Plan: replace the Orama archive with SQLite
 
-Status: approved, not started. Work on a branch (`feat/sqlite-store`), release as **2.2.0**.
+Status: implemented on branch (`feat/sqlite-store`), release as **2.2.0**.
 
 ## Why
 

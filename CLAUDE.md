@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The **MCP surface is deliberately narrow**:
 - Live Google lookups: `meetTranscriptList`, `meetTranscriptGet`.
-- Persisted archive (local Orama DB): `transcriptList`, `transcriptGet`, `transcriptSearch`, `transcriptBackfill`, `transcriptEnrich`, `transcriptReembed`.
+- Persisted archive (local SQLite DB): `transcriptList`, `transcriptGet`, `transcriptSearch`, `transcriptBackfill`, `transcriptEnrich`, `transcriptReembed`.
 - Status: `mcpStatus`.
 
 Silkweave registers MCP tools under the PascalCase form of the action name (`mcpStatus` → `McpStatus`) and CLI commands under the kebab-case form (`mcp-status`).
@@ -37,7 +37,8 @@ All-static. No OAuth. On-disk artefacts in `~/.silkweave-meet/`:
 
 - `service-account.json` — DWD-enabled service account key (exported as `MeetClient.keyPath` / `SERVICE_ACCOUNT_KEY_PATH`).
 - `config.json` — `{ users: string[], cursors?: Record<email, rfc3339>, watcher?: WatcherConfig, openai?: OpenAIConfig }`.
-- `transcripts.msp` — persisted Orama DB (binary). Managed by `src/lib/transcriptDb.ts`.
+- `transcripts.db` (+ `-wal`/`-shm`) — SQLite archive (`node:sqlite`, Node ≥ 22.13). Managed by `src/lib/transcriptDb.ts`.
+- `transcripts.msp` — legacy Orama archive (≤ 2.1.x). Only read once, as the auto-migration source (`MeetClient.legacyTranscriptDbPath`).
 - `transcripts/<organizerEmail>/…` — default markdown archive (overridable via `watcher.transcriptDir`).
 
 Interface:
@@ -61,7 +62,7 @@ Every action is `createAction({ input: z.object(...), run: async ({ input }) => 
   - `EventSubscriptionCreate` / `EventSubscriptionCreateForUser` — Workspace Events subscriptions publishing to a Pub/Sub topic.
   - `EventSubscriptionList` / `EventSubscriptionDelete` — manage them.
 - `Transcript/` — two distinct groups:
-  - **Archive (MCP + CLI)**: `TranscriptList`, `TranscriptGet`, `TranscriptSearch` read from the local Orama DB. `TranscriptBackfill` ingests historical transcripts for every configured user (default: last 30 days). `TranscriptEnrich` re-runs Calendar enrichment on archived records without a Calendar match (or one `transcriptId`) using only the stored meet code/times, rewrites the record + Markdown file, and re-embeds. `TranscriptReembed` fills in missing embeddings.
+  - **Archive (MCP + CLI)**: `TranscriptList`, `TranscriptGet`, `TranscriptSearch` read from the local SQLite DB. `TranscriptBackfill` ingests historical transcripts for every configured user (default: last 30 days). `TranscriptEnrich` re-runs Calendar enrichment on archived records without a Calendar match (or one `transcriptId`) using only the stored meet code/times, rewrites the record + Markdown file, and re-embeds. `TranscriptReembed` fills in missing embeddings.
   - **Watcher (CLI-only)**: `TranscriptWatchStart|Stop|Status` control the background Pub/Sub consumer.
 - `Mcp/` — `McpStatus`: the single MCP-exposed health/status tool (also available in the CLI).
 - `Setup/` — **CLI-only** helpers (`SetupStatus`, `SetupSubscribeAll`) that iterate every user in the config. Registered directly in `src/cli.ts`, not `src/actions/index.ts`, so they don't ship over MCP.
@@ -74,7 +75,7 @@ Every action is `createAction({ input: z.object(...), run: async ({ input }) => 
 
 ### Transcript archive & ingest — `src/lib/transcriptDb.ts` + `transcriptIngest.ts` + `transcriptEnrich.ts`
 
-- **`transcriptDb`** — singleton wrapper around an Orama DB persisted as `~/.silkweave-meet/transcripts.msp` (binary). Schema keeps `startTime`/`endTime` as epoch ms for range filters, plus subject/description/attendees/markdown text for full-text, and a `vector[1536]` embedding field for optional vector/hybrid search. Every mutation (`upsert`, `remove`, `updateEmbedding`) persists to disk — single-writer assumption (MCP server + CLI should not both mutate simultaneously).
+- **`transcriptDb`** — singleton wrapper around a SQLite DB (`node:sqlite` `DatabaseSync`) at `~/.silkweave-meet/transcripts.db`, opened lazily once per process. **WAL mode + `busy_timeout`**: many processes (MCP sessions, watcher, CLI backfill) can read and write concurrently; every write is a per-row upsert committed immediately (`save()` and `upsert`'s `skipSave` are compatibility no-ops; `upsertMany` / `updateEmbeddings` batch inside `BEGIN IMMEDIATE`). Table `transcripts` keeps `start_time`/`end_time` as epoch ms, `attendees` as a JSON array, and the embedding as a Float32 BLOB (`NULL` = no embedding; `hasEmbedding` is derived; stored vectors are readable via `get`). Full-text is an external-content **FTS5** table (`porter unicode61`, kept in sync by triggers); user queries are tokenised and each token quoted as a prefix term, so input can never cause an FTS syntax error. Fulltext results are ordered by start time (score = BM25 with subject/description/text boosts 3/2/1); vector search is brute-force cosine in JS (default similarity 0.8); hybrid = 0.5 × normalised BM25 + 0.5 × cosine. On first open it auto-migrates the legacy Orama `transcripts.msp` (inside `BEGIN IMMEDIATE`, without embeddings — run `transcript-reembed` after) and records `meta.migrated_from_orama`. `@orama/*` stay as dependencies only for that migration.
 - **`transcriptEnrich.enrichFromCalendar({ auth, meetingCode, conferenceStart, conferenceEnd })`** — deterministic Calendar match. Queries the user's primary calendar within ±1 day of the conference window and filters locally by `eventMeetCode(event) === meetingCode` (`conferenceData.conferenceId`, else the code parsed from the video entry point URI or `hangoutLink`), paging through all results. No time-based guessing; no match = no enrichment (file is still saved, DB record is still inserted with empty subject/attendees).
 - **`transcriptIngest.ingestTranscript({ userEmail, transcriptName, options })`** — the single code path used by both the watcher and `transcriptBackfill`. Dedupes via `transcriptDb.has(transcriptId)`, fetches entries + participants + conference + space, enriches via Calendar, writes the markdown file under `<transcriptDir>/<organizerEmail>/…`, computes an OpenAI embedding if configured (else inserts a zero vector with `hasEmbedding=false`), and upserts the record.
 

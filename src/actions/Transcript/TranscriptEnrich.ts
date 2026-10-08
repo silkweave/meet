@@ -32,8 +32,7 @@ export const TranscriptEnrich = createAction({
       if (!record) { throw new Error(`Transcript ${transcriptId} is not in the local archive`) }
       targets = [record]
     } else {
-      const unmatched = (await transcriptDb.all()).filter((r) => !r.calendarEventId)
-      unmatched.sort((a, b) => b.startTime - a.startTime)
+      const unmatched = await transcriptDb.listUnmatched()
       targets = limit ? unmatched.slice(0, limit) : unmatched
     }
 
@@ -92,7 +91,7 @@ async function enrichRecord(existing: TranscriptRecord, userEmail: string | unde
     }), 'utf-8')
 
     const text = [calendar.subject, calendar.description, markdown].filter(Boolean).join('\n\n')
-    // Orama does not return stored vectors, so an enriched (changed) text is always re-embedded.
+    // Enrichment changes the indexed text, so the stored vector is stale and is recomputed.
     let embedding = zeroEmbedding()
     let hasEmbedding = false
     if (isEmbeddingEnabled() && text.trim()) {
