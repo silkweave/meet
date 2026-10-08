@@ -14,6 +14,7 @@ import { MeetSpaceGet } from './Meet/MeetSpaceGet.js'
 import { MeetTranscriptGet } from './Meet/MeetTranscriptGet.js'
 import { MeetTranscriptList } from './Meet/MeetTranscriptList.js'
 import { TranscriptBackfill } from './Transcript/TranscriptBackfill.js'
+import { TranscriptEnrich } from './Transcript/TranscriptEnrich.js'
 import { TranscriptGet } from './Transcript/TranscriptGet.js'
 import { TranscriptList } from './Transcript/TranscriptList.js'
 import { TranscriptReembed } from './Transcript/TranscriptReembed.js'
@@ -39,6 +40,7 @@ export const actions = [
   MeetTranscriptGet,
   MeetTranscriptList,
   TranscriptBackfill,
+  TranscriptEnrich,
   TranscriptGet,
   TranscriptList,
   TranscriptReembed,
@@ -53,6 +55,7 @@ export const mcpActions = [
   MeetTranscriptGet,
   MeetTranscriptList,
   TranscriptBackfill,
+  TranscriptEnrich,
   TranscriptGet,
   TranscriptList,
   TranscriptReembed,

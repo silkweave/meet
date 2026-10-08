@@ -154,6 +154,12 @@ class TranscriptDbImpl {
     })
   }
 
+  async all(): Promise<TranscriptRecord[]> {
+    await this.init()
+    const results = await search(this.getDb(), { limit: 100000 } as SearchParams<AnyOrama>)
+    return results.hits.map((h) => h.document as unknown as TranscriptRecord)
+  }
+
   async updateEmbeddings(pairs: Array<{ id: string; embedding: number[] }>): Promise<number> {
     await this.init()
     let updated = 0

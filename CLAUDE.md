@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The **MCP surface is deliberately narrow**:
 - Live Google lookups: `meetTranscriptList`, `meetTranscriptGet`.
-- Persisted archive (local Orama DB): `transcriptList`, `transcriptGet`, `transcriptSearch`, `transcriptBackfill`, `transcriptReembed`.
+- Persisted archive (local Orama DB): `transcriptList`, `transcriptGet`, `transcriptSearch`, `transcriptBackfill`, `transcriptEnrich`, `transcriptReembed`.
 - Status: `mcpStatus`.
 
 Silkweave registers MCP tools under the PascalCase form of the action name (`mcpStatus` → `McpStatus`) and CLI commands under the kebab-case form (`mcp-status`).
@@ -61,12 +61,12 @@ Every action is `createAction({ input: z.object(...), run: async ({ input }) => 
   - `EventSubscriptionCreate` / `EventSubscriptionCreateForUser` — Workspace Events subscriptions publishing to a Pub/Sub topic.
   - `EventSubscriptionList` / `EventSubscriptionDelete` — manage them.
 - `Transcript/` — two distinct groups:
-  - **Archive (MCP + CLI)**: `TranscriptList`, `TranscriptGet`, `TranscriptSearch` read from the local Orama DB. `TranscriptBackfill` ingests historical transcripts for every configured user (default: last 30 days).
+  - **Archive (MCP + CLI)**: `TranscriptList`, `TranscriptGet`, `TranscriptSearch` read from the local Orama DB. `TranscriptBackfill` ingests historical transcripts for every configured user (default: last 30 days). `TranscriptEnrich` re-runs Calendar enrichment on archived records without a Calendar match (or one `transcriptId`) using only the stored meet code/times, rewrites the record + Markdown file, and re-embeds. `TranscriptReembed` fills in missing embeddings.
   - **Watcher (CLI-only)**: `TranscriptWatchStart|Stop|Status` control the background Pub/Sub consumer.
 - `Mcp/` — `McpStatus`: the single MCP-exposed health/status tool (also available in the CLI).
 - `Setup/` — **CLI-only** helpers (`SetupStatus`, `SetupSubscribeAll`) that iterate every user in the config. Registered directly in `src/cli.ts`, not `src/actions/index.ts`, so they don't ship over MCP.
 
-`src/actions/index.ts` exports two arrays: `actions` (the full set — used by the CLI) and `mcpActions` (the narrow MCP set: `McpStatus`, the live `MeetTranscript*`, and the archive `Transcript{Backfill,Get,List,Search}`). When adding a new action:
+`src/actions/index.ts` exports two arrays: `actions` (the full set — used by the CLI) and `mcpActions` (the narrow MCP set: `McpStatus`, the live `MeetTranscript*`, and the archive `Transcript{Backfill,Enrich,Get,List,Reembed,Search}`). When adding a new action:
 
 - If it belongs on MCP (read-only transcript access, archive search, backfill, or status), add it to both `actions` and `mcpActions`.
 - If it is setup/configuration/management, add it to `actions` only so the CLI picks it up.
@@ -75,7 +75,7 @@ Every action is `createAction({ input: z.object(...), run: async ({ input }) => 
 ### Transcript archive & ingest — `src/lib/transcriptDb.ts` + `transcriptIngest.ts` + `transcriptEnrich.ts`
 
 - **`transcriptDb`** — singleton wrapper around an Orama DB persisted as `~/.silkweave-meet/transcripts.msp` (binary). Schema keeps `startTime`/`endTime` as epoch ms for range filters, plus subject/description/attendees/markdown text for full-text, and a `vector[1536]` embedding field for optional vector/hybrid search. Every mutation (`upsert`, `remove`, `updateEmbedding`) persists to disk — single-writer assumption (MCP server + CLI should not both mutate simultaneously).
-- **`transcriptEnrich.enrichFromCalendar({ auth, meetingCode, conferenceStart, conferenceEnd })`** — deterministic Calendar match. Queries the user's primary calendar within ±1 day of the conference window and filters locally by `conferenceData.conferenceId === meetingCode`. No time-based guessing; no match = no enrichment (file is still saved, DB record is still inserted with empty subject/attendees).
+- **`transcriptEnrich.enrichFromCalendar({ auth, meetingCode, conferenceStart, conferenceEnd })`** — deterministic Calendar match. Queries the user's primary calendar within ±1 day of the conference window and filters locally by `eventMeetCode(event) === meetingCode` (`conferenceData.conferenceId`, else the code parsed from the video entry point URI or `hangoutLink`), paging through all results. No time-based guessing; no match = no enrichment (file is still saved, DB record is still inserted with empty subject/attendees).
 - **`transcriptIngest.ingestTranscript({ userEmail, transcriptName, options })`** — the single code path used by both the watcher and `transcriptBackfill`. Dedupes via `transcriptDb.has(transcriptId)`, fetches entries + participants + conference + space, enriches via Calendar, writes the markdown file under `<transcriptDir>/<organizerEmail>/…`, computes an OpenAI embedding if configured (else inserts a zero vector with `hasEmbedding=false`), and upserts the record.
 
 ### Transcript Watcher — `src/lib/transcriptWatcher.ts`
@@ -136,7 +136,7 @@ All `mcp__roam-code__*` tools are available inside sub-agents (both `general-pur
 
 ## Testing via MCP
 
-This project is configured as an MCP server in `.mcp.json` (`pnpm tsx src/mcp.ts`). Claude Code can call the MCP-exposed tools directly — `mcp__meet__McpStatus`, `mcp__meet__MeetTranscriptList`, `mcp__meet__MeetTranscriptGet`, `mcp__meet__TranscriptList`, `mcp__meet__TranscriptGet`, `mcp__meet__TranscriptSearch`, `mcp__meet__TranscriptBackfill`, `mcp__meet__TranscriptReembed` — to verify changes. For everything else (subscriptions, watcher, setup), run the action via the CLI using its kebab-case name: `pnpm tsx src/cli.ts <action-name> …` (e.g. `mcp-status`).
+This project is configured as an MCP server in `.mcp.json` (`pnpm tsx src/mcp.ts`). Claude Code can call the MCP-exposed tools directly — `mcp__meet__McpStatus`, `mcp__meet__MeetTranscriptList`, `mcp__meet__MeetTranscriptGet`, `mcp__meet__TranscriptList`, `mcp__meet__TranscriptGet`, `mcp__meet__TranscriptSearch`, `mcp__meet__TranscriptBackfill`, `mcp__meet__TranscriptEnrich`, `mcp__meet__TranscriptReembed` — to verify changes. For everything else (subscriptions, watcher, setup), run the action via the CLI using its kebab-case name: `pnpm tsx src/cli.ts <action-name> …` (e.g. `mcp-status`).
 
 **Restarting after code changes:** The MCP server runs as a child process of Claude Code. There is no longer an `mcpRestart` tool — ask the user to restart the MCP connection (or kill the process) so code changes are picked up.
 

@@ -14,6 +14,7 @@ Authentication is **exclusively** through a Google Workspace service account wit
   - `eventPullTranscripts` — on-demand polling with a persisted cursor (idempotent)
   - Built-in background watcher (`transcriptWatch*`) — streams from Pub/Sub and writes Markdown files, with optional per-save shell command
 - `transcriptBackfill` — one-shot catch-up across all users for the past N days
+- `transcriptEnrich` — re-run Calendar enrichment for archived transcripts that have no Calendar match yet
 
 ## Quick Start
 
@@ -104,13 +105,15 @@ Everything non-secret lives in `~/.silkweave-meet/config.json`:
 
 Every action that reads Google data takes a required `userEmail` — the Workspace user the service account impersonates for that call. Permissions match exactly what that user can see.
 
-The **MCP surface is intentionally narrow**: only the read-only transcript tools plus `transcriptBackfill` and `mcpStatus` are exposed over MCP. Everything that manages configuration, subscriptions, or the background watcher is **CLI-only** (via `meet-cli`).
+The **MCP surface is intentionally narrow**: only the read-only transcript tools plus the archive maintenance tools (`transcriptBackfill`, `transcriptEnrich`, `transcriptReembed`) and `mcpStatus` are exposed over MCP. Everything that manages configuration, subscriptions, or the background watcher is **CLI-only** (via `meet-cli`).
 
 MCP-exposed tools:
 
 - `meetTranscriptList` / `meetTranscriptGet` — live lookup against the Google Meet API.
 - `transcriptList` / `transcriptGet` / `transcriptSearch` — read from the persisted local archive (no Google round-trip; works offline for previously-ingested transcripts).
 - `transcriptBackfill` — catch-up ingest across all configured users (default: last 30 days). Dedupes by `transcriptId`.
+- `transcriptEnrich` — re-run Calendar enrichment for archived transcripts without a Calendar match (or one `transcriptId`).
+- `transcriptReembed` — compute missing OpenAI embeddings.
 - `mcpStatus` — health & status.
 
 ### Upcoming meetings — `Calendar*` (CLI-only)
@@ -136,7 +139,7 @@ MCP-exposed tools:
 
 ### Persisted transcript archive — `Transcript*` (local Orama DB)
 
-Reads from `~/.silkweave-meet/transcripts.msp`; populated by the background watcher (live) and `transcriptBackfill` (historical). Every record is enriched with its Calendar event (subject, description, attendees) — matching is deterministic via `conferenceData.conferenceId` → Meet space `meetingCode`, never time-guessing.
+Reads from `~/.silkweave-meet/transcripts.msp`; populated by the background watcher (live) and `transcriptBackfill` (historical). Every record is enriched with its Calendar event (subject, description, attendees) — matching is deterministic: the event's Meet code (`conferenceData.conferenceId`, else the Meet link in its video entry point or `hangoutLink`) must equal the Meet space `meetingCode`, never time-guessing.
 
 | Tool | Surface | Purpose |
 | --- | --- | --- |
@@ -144,6 +147,8 @@ Reads from `~/.silkweave-meet/transcripts.msp`; populated by the background watc
 | `transcriptGet` | MCP + CLI | Fetch a single persisted transcript by id (or full resource name); returns metadata plus the rendered markdown body read from disk. |
 | `transcriptSearch` | MCP + CLI | Keyword search over subject / description / full transcript body. With `mode=vector` or `mode=hybrid` and an OpenAI key configured, runs semantic or hybrid search. |
 | `transcriptBackfill` | MCP + CLI | Iterate every configured user, list conferences since `startTime` (default: 30 days ago), ingest any transcripts not already in the database. Dedupes by `transcriptId`. |
+| `transcriptEnrich` | MCP + CLI | Re-run Calendar enrichment for every archived transcript without a Calendar match (or a single `transcriptId`), then rewrite its record and Markdown file. Uses only the stored meet code and times plus Calendar, so it works for meetings past Meet's retention window. Enriched transcripts are re-embedded when OpenAI is configured. |
+| `transcriptReembed` | MCP + CLI | Compute embeddings for records ingested without one (`force=true` re-embeds everything). Requires an OpenAI key. |
 
 ### Notifications — `Event*` (CLI-only)
 

@@ -67,16 +67,17 @@ export async function prepareTranscriptRecord(params: {
     }
 
     const organizerEmail = calendar?.organizerEmail || userEmail
-    const transcriptDir = options.transcriptDir ?? MeetClient.getTranscriptDir()
-    const userDir = join(transcriptDir, sanitizeEmailForPath(organizerEmail))
-    if (!existsSync(userDir)) { mkdirSync(userDir, { recursive: true }) }
-
     const markdown = renderTranscriptMarkdown(fetched.entries, fetched.participants)
     const startTimeStr = fetched.transcript.startTime ?? fetched.conference.startTime ?? new Date().toISOString()
     const endTimeStr = fetched.transcript.endTime ?? fetched.conference.endTime ?? startTimeStr
-    const date = startTimeStr.slice(0, 10)
-    const slug = sanitizeForFilename(fetched.meetingCode ?? conferenceRecordName.replace('conferenceRecords/', ''))
-    const filePath = join(userDir, `${date}_${slug}_${sanitizeForFilename(transcriptId)}.md`)
+    const filePath = transcriptFilePath({
+      transcriptDir: options.transcriptDir ?? MeetClient.getTranscriptDir(),
+      organizerEmail,
+      startTime: startTimeStr,
+      meetingCode: fetched.meetingCode,
+      conferenceRecordName,
+      transcriptId
+    })
 
     const subject = calendar?.subject ?? ''
     const description = calendar?.description ?? ''
@@ -224,6 +225,21 @@ async function fetchTranscriptBundle(auth: JWT, conferenceRecordName: string, tr
   return { entries, participants, transcript, conference, meetingCode, spaceId }
 }
 
+/** Resolves (and creates the folder for) `<transcriptDir>/<organizerEmail>/<date>_<code>_<transcriptId>.md`. */
+export function transcriptFilePath(params: {
+  transcriptDir: string
+  organizerEmail: string
+  startTime: string
+  meetingCode?: string
+  conferenceRecordName: string
+  transcriptId: string
+}): string {
+  const userDir = join(params.transcriptDir, sanitizeEmailForPath(params.organizerEmail))
+  if (!existsSync(userDir)) { mkdirSync(userDir, { recursive: true }) }
+  const slug = sanitizeForFilename(params.meetingCode || params.conferenceRecordName.replace('conferenceRecords/', ''))
+  return join(userDir, `${params.startTime.slice(0, 10)}_${slug}_${sanitizeForFilename(params.transcriptId)}.md`)
+}
+
 export function sanitizeEmailForPath(email: string): string {
   return email.replace(/[^a-zA-Z0-9._@-]/g, '-') || 'unknown'
 }
@@ -232,7 +248,7 @@ export function sanitizeForFilename(input: string): string {
   return input.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 64) || 'unknown'
 }
 
-function renderTranscriptFile(params: {
+export function renderTranscriptFile(params: {
   subject: string
   description: string
   organizerEmail: string
