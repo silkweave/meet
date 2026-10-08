@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Typecheck only:** `pnpm typecheck`
 - **Clean:** `pnpm clean`
 - **Run MCP server (dev):** `pnpm tsx src/mcp.ts`
-- **Run CLI (dev):** `pnpm tsx src/cli.ts` (or `pnpm cli <actionName>`)
+- **Run CLI (dev):** `pnpm tsx src/cli.ts` (or `pnpm cli <action-name>`, e.g. `mcp-status`)
 
 ## Architecture
 
@@ -18,8 +18,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The **MCP surface is deliberately narrow**:
 - Live Google lookups: `meetTranscriptList`, `meetTranscriptGet`.
-- Persisted archive (local Orama DB): `transcriptList`, `transcriptGet`, `transcriptSearch`, `transcriptBackfill`.
+- Persisted archive (local Orama DB): `transcriptList`, `transcriptGet`, `transcriptSearch`, `transcriptBackfill`, `transcriptReembed`.
 - Status: `mcpStatus`.
+
+Silkweave registers MCP tools under the PascalCase form of the action name (`mcpStatus` → `McpStatus`) and CLI commands under the kebab-case form (`mcp-status`).
 
 Everything that configures subscriptions, controls the background watcher, or manages multi-user setup is **CLI-only**. The CLI exposes the full action surface.
 
@@ -134,7 +136,7 @@ All `mcp__roam-code__*` tools are available inside sub-agents (both `general-pur
 
 ## Testing via MCP
 
-This project is configured as an MCP server in `.mcp.json` (`pnpm tsx src/mcp.ts`). Claude Code can call the MCP-exposed tools directly — `mcp__meet__mcpStatus`, `mcp__meet__meetTranscriptList`, `mcp__meet__meetTranscriptGet`, `mcp__meet__transcriptList`, `mcp__meet__transcriptGet`, `mcp__meet__transcriptSearch`, `mcp__meet__transcriptBackfill` — to verify changes. For everything else (subscriptions, watcher, setup), run the action via the CLI: `pnpm tsx src/cli.ts <actionName> …`.
+This project is configured as an MCP server in `.mcp.json` (`pnpm tsx src/mcp.ts`). Claude Code can call the MCP-exposed tools directly — `mcp__meet__McpStatus`, `mcp__meet__MeetTranscriptList`, `mcp__meet__MeetTranscriptGet`, `mcp__meet__TranscriptList`, `mcp__meet__TranscriptGet`, `mcp__meet__TranscriptSearch`, `mcp__meet__TranscriptBackfill`, `mcp__meet__TranscriptReembed` — to verify changes. For everything else (subscriptions, watcher, setup), run the action via the CLI using its kebab-case name: `pnpm tsx src/cli.ts <action-name> …` (e.g. `mcp-status`).
 
 **Restarting after code changes:** The MCP server runs as a child process of Claude Code. There is no longer an `mcpRestart` tool — ask the user to restart the MCP connection (or kill the process) so code changes are picked up.
 
