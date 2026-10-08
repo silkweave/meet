@@ -1,6 +1,6 @@
 {
   "name": "@silkweave/meet",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Silkweave Google Meet MCP & CLI",
   "author": "Tobias Strebitzer <tobias.strebitzer@atomic.bi>",
   "license": "MIT",
